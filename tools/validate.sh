@@ -32,6 +32,16 @@ run_static_checks() {
         tests/test_demo_navigation.c main/demo_navigation.c \
         -o "${test_dir}/test_demo_navigation"
     "${test_dir}/test_demo_navigation"
+    # love_date.c 的农历事件会调 love_lunar,所以两个测试都要带上 love_lunar.c。
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_love_date.c main/love_date.c main/love_lunar.c \
+        -o "${test_dir}/test_love_date"
+    "${test_dir}/test_love_date"
+    # 农历换算依赖 tools/gen_lunar_table.py 生成的表,同样按纯逻辑测。
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_love_lunar.c main/love_lunar.c main/love_date.c \
+        -o "${test_dir}/test_love_lunar"
+    "${test_dir}/test_love_lunar"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Icomponents/bsp/src \
         tests/test_bsp_display_rounding.c components/bsp/src/bsp_display_rounding.c \
         -o "${test_dir}/test_bsp_display_rounding"

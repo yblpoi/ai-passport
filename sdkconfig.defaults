@@ -21,12 +21,21 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
+# 恋爱倒计时的天数用 32 号数字,Montserrat 32 只增加少量点阵数据。
+CONFIG_LV_FONT_MONTSERRAT_32=y
 # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
-CONFIG_LV_MEM_SIZE_KILOBYTES=24
+# demo UI 简单,24KB 够用;恋爱倒计时的页面对象更多(底纹+图标+多人卡片),
+# 调到 32KB 留出余量,避免绘制时池耗尽。
+CONFIG_LV_MEM_SIZE_KILOBYTES=32
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
+
+# --- SNTP ---
+# 设备没有 RTC，时间只能靠网络拿回来，所以配两个服务器做容错。
+# 该选项同时决定 esp_sntp_config_t.servers[] 的长度：保持 1 会让第二个
+# 服务器在编译期被静默丢弃（excess elements in array initializer）。
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
 # --- Bluetooth LE / NimBLE ---
 # ESP32-C3 仅支持 BLE；示例只启用单连接 peripheral 所需的最小 host 配置。

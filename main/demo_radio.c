@@ -28,13 +28,14 @@ esp_err_t demo_radio_nvs_prepare(void)
 esp_err_t demo_radio_network_prepare(void)
 {
     if (!s_netif_ready) {
+        // 应用可能已经初始化过;重复调用同样视为成功。
         esp_err_t err = esp_netif_init();
-        if (err != ESP_OK) return err;
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
         s_netif_ready = true;
     }
     if (!s_event_loop_ready) {
         esp_err_t err = esp_event_loop_create_default();
-        if (err != ESP_OK) return err;
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
         s_event_loop_ready = true;
     }
     return ESP_OK;

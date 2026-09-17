@@ -53,18 +53,46 @@ demo，也不要用该分支的旧版 BSP、分区表或配置覆盖当前版本
 
 ## 本应用的配网入口
 
-本应用提供两条独立的凭据配置入口，另有仅用于对时的蓝牙。三者并存，互不替代。
+本应用提供三条独立的凭据配置入口，其中后两条共用同一套命令。三者并存，互不替代。
 
 | 入口 | 用法 | 说明 |
 | --- | --- | --- |
 | USB 串口控制台 | `wifi <名称> <密码>` | `main/love_console.c`，走 USB-Serial-JTAG 控制台。**唯一在设备完全不可达时仍然可用的入口**——而设备配错网络时恰好就是这种状态。 |
+| 蓝牙串口控制台 | 在 BLE 串口 App 里敲 `wifi <名称> <密码>` | `main/love_ble.c` 广播一个标准 NUS 服务，手机装上现成的 BLE 串口 App 即可，命令与 USB 控制台完全一致。出厂默认关闭。 |
 | 后台网页 | “网络与热点”卡片 | `main/love_httpd.c`，经设备自带热点访问。热点只在设备没有已保存凭据时才开启。 |
-| 蓝牙 LE | 仅对时 | `main/love_ble.c` 在服务 A001 上收发 Unix 时间戳，不承载凭据。 |
 
-两条凭据路径都汇聚到 `main/love_net.c` 的 `love_net_set_credentials()` 与
+三条凭据路径都汇聚到 `main/love_net.c` 的 `love_net_set_credentials()` 与
 `love_net_forget()`，因此只有一条凭据通路、一份 NVS 记录。控制台里不带参数的
 `wifi` 打印当前状态，`wifi open <名称>` 连接开放网络，`wifi clear` 清除凭据并
 重新打开热点。
 
 控制台**不打印密码、也不回读密码**：`love_store_load_wifi()` 是唯一的读取方，
 且只被网络层调用。控制台按空格切分参数，因此名称或密码含空格时请改用后台网页。
+
+### 蓝牙串口控制台
+
+`main/love_ble.c` 把 USB 控制台那张命令表（`main/love_console.c`）原样搬到
+**标准 Nordic UART Service (NUS)** 上，所以 Serial Bluetooth Terminal、nRF Connect
+这类现成 App 不用手配 UUID 就能收发。设备广播名是 `LoveCount-XXXX`（`XXXX` 取自
+蓝牙 MAC 后两字节）。
+
+| 角色 | UUID |
+| --- | --- |
+| 服务 | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` |
+| 手机 → 设备（写入） | `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` |
+| 设备 → 手机（通知） | `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` |
+
+128 位 UUID **刻意不放进广播包**：31 字节的广播包装不下 flags、设备名和一个
+128 位 UUID，硬塞会让 `ble_gap_adv_set_fields()` 返回 `EMSGSIZE`。
+
+可用命令：`help`、`status`（时间/网络/蓝牙/内存）、`wifi …`、`time <Unix 秒>` 对时、
+`ble on` / `ble off`。手机连上并订阅通知后，设备会自动把 `help` 的输出推过去。
+
+蓝牙默认关闭，开关存在配置记录的 `ble_enabled` 字段里，可以从设备设置页、后台网页
+或 `ble on` / `ble off` 命令三处切换。开启期间控制台任务还会盯空闲：**连续 5 分钟
+无人连接**就把协议栈停掉并把 `ble_enabled` 写回 0，归还约 51 KB 堆。手机连着的时候
+永不自动关闭。
+
+关蓝牙必须在一个普通任务里做（`nimble_port_stop()` 是无超时等待 NimBLE host 任务
+退出的），所以 `main/love_ble.c` 自带一个 4 KB 栈的控制台任务，它同时负责执行命令、
+空闲判定和把输出按协商 MTU 分片通知。这个任务首次开启蓝牙时创建、之后常驻。

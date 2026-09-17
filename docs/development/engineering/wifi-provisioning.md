@@ -60,16 +60,16 @@ unperformed checks under `Unverified`.
 
 ## Provisioning entry points in this application
 
-This application ships two independent ways to set the Wi-Fi credentials, plus
-Bluetooth for time only. None of them replaces another.
+This application ships three independent ways to set the Wi-Fi credentials. The
+last two share one command set. None of them replaces another.
 
 | Entry | How | Notes |
 | --- | --- | --- |
 | USB serial console | `wifi <ssid> <password>` | `main/love_console.c`, on the USB-Serial-JTAG console. The only entry that works when the device is not reachable on any network, which is exactly the state a misconfigured device is in. |
+| Bluetooth serial console | `wifi <ssid> <password>` in a BLE serial app | `main/love_ble.c` advertises a standard Nordic UART Service, so off-the-shelf apps work. The command set is identical to the USB console. Off by default. |
 | Admin web page | Network and hotspot card | `main/love_httpd.c`, served over the device's own hotspot. That hotspot only opens while the device has no saved credentials. |
-| Bluetooth LE | time sync only | `main/love_ble.c` carries a Unix timestamp on service A001. It does not carry credentials. |
 
-Both credential paths converge on `love_net_set_credentials()` and
+All credential paths converge on `love_net_set_credentials()` and
 `love_net_forget()` in `main/love_net.c`, so there is one credential path and one
 NVS record. From the console, `wifi` with no arguments prints the current state,
 `wifi open <ssid>` joins an open network, and `wifi clear` forgets the
@@ -79,3 +79,38 @@ The console never logs the password and never reads it back: `love_store_load_wi
 is the only reader and the network layer is the only caller. The console parser
 splits arguments on spaces, so an SSID or password containing a space has to be
 entered from the web page instead.
+
+### Bluetooth serial console
+
+`main/love_ble.c` serves the same command table as the USB console
+(`main/love_console.c`) over a standard Nordic UART Service, so off-the-shelf
+apps (Serial Bluetooth Terminal, nRF Connect) work without any UUID setup. The
+device advertises as `LoveCount-XXXX`, where `XXXX` comes from the Bluetooth MAC.
+
+| Role | UUID |
+| --- | --- |
+| Service | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` |
+| Phone to device (write) | `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` |
+| Device to phone (notify) | `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` |
+
+The 128-bit UUID is deliberately kept out of the advertising packet: the 31-byte
+packet cannot hold the flags, the device name and a 128-bit UUID, and
+`ble_gap_adv_set_fields()` returns `EMSGSIZE` when it does not fit.
+
+Available commands: `help`, `status` (time, network, Bluetooth, memory), `wifi …`,
+`time <unix seconds>` to set the clock, and `ble on` / `ble off`. Once a phone has
+connected and subscribed to notifications, the device pushes the output of `help`
+to it automatically.
+
+Bluetooth is off by default and its switch lives in the `ble_enabled` field of the
+config record. It can be toggled from the device settings page, the admin web page,
+or the `ble on` / `ble off` command. While it is on, the console task also watches
+for idle time: after **five minutes with nobody connected** it stops the stack and
+writes `ble_enabled = 0` back, returning roughly 51 KB of heap. A connected phone is
+never dropped automatically.
+
+Stopping the stack has to happen in an ordinary task (`nimble_port_stop()` waits for
+the NimBLE host task without a timeout), so `main/love_ble.c` owns a 4 KB console
+task that executes commands, decides when to stop, and splits output into
+notifications sized to the negotiated MTU. That task is created the first time
+Bluetooth starts and stays for the lifetime of the process.

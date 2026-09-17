@@ -104,13 +104,8 @@
     <div class="row" style="margin-top:12px">
       <button type="button" class="primary" id="syncTime">用手机当前时间对时</button>
     </div>
-    <label for="bleEnabled">蓝牙对时</label>
-    <select id="bleEnabled">
-      <option value="1">开（可用 nRF Connect 对时）</option>
-      <option value="0">关（出厂默认，省内存）</option>
-    </select>
     <p class="muted">设备没有时钟。联网后会自动走 SNTP；也可以点上面的按钮用手机时间来对时（不依赖外网）。
-      蓝牙只用于对时，默认关闭：关着时上面两种对时都不受影响，需要 nRF Connect 那种对时方式时再打开。</p>
+      没有网络也没有手机浏览器时，还能用蓝牙串口敲 <code>time &lt;Unix 秒&gt;</code> 对时。</p>
   </div>
 
   <div class="card">
@@ -140,12 +135,26 @@
   </div>
 
   <div class="card">
+    <h2>蓝牙串口</h2>
+    <label for="bleEnabled">蓝牙</label>
+    <select id="bleEnabled">
+      <option value="1">开（可用手机 App 连上敲命令）</option>
+      <option value="0">关（出厂默认，省内存）</option>
+    </select>
+    <p class="muted">打开后设备广播成 <b>LoveCount-XXXX</b>，用手机上的 BLE 串口 App（Serial Bluetooth Terminal、
+      nRF Connect 等）连上就能敲命令，命令集与 USB 串口控制台完全一样：<code>help</code>、<code>status</code>、
+      <code>wifi &lt;名称&gt; &lt;密码&gt;</code>、<code>time &lt;Unix 秒&gt;</code>、<code>ble off</code>。
+      用的是标准 NUS 服务（服务 <code>6E400001-…</code>，写入 <code>6E400002-…</code>，通知 <code>6E400003-…</code>），
+      常见 App 都直接认，不用手配 UUID。</p>
+    <p class="muted">蓝牙默认关闭，关着时不占内存也没有任何功能受影响；打开后一直没人连接的话，5 分钟会自动关闭并把这里改回「关」。</p>
+  </div>
+
+  <div class="card">
     <h2>保存</h2>
     <div class="row">
       <button type="button" class="primary" id="save">保存到设备</button>
       <button type="button" class="ghost" id="reload">放弃改动</button>
     </div>
-    <p class="muted">BLE 对时：先在「时间」里把蓝牙对时打开，再用 nRF Connect 等工具连接设备，向服务 A001 的 A002 特征写入 Unix 时间戳（秒，十进制文本或 8 字节小端）即可。</p>
   </div>
 </div>
 <div class="toast" id="toast"></div>

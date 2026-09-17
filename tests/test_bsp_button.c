@@ -70,6 +70,13 @@ esp_err_t iot_button_register_cb(button_handle_t h, button_event_t ev, button_ev
     cb(h, u); // No user callbacks may escape a partial initialization.
     return ++callback_calls == fail_callback ? ESP_ERR_NO_MEM : ESP_OK;
 }
+// 深睡前停采样。桩只记一次调用:真机上它必须发生在武装 GPIO 唤醒之前,
+// 否则 ADC 采样瞬变会把设备在入睡瞬间叫醒(见 bsp_button_suspend 的说明)。
+static int suspend_calls;
+esp_err_t iot_button_stop(void) {
+    ++suspend_calls;
+    return ESP_OK;
+}
 static void event_cb(bsp_btn_t btn, bsp_btn_ev_t ev, void *u) {
     assert(btn == BSP_BTN_OK && ev == BSP_BTN_CLICK && u == &events);
     ++events;
@@ -131,5 +138,6 @@ int main(void) {
     assert(adc_live && cal_live && live_buttons == BSP_BTN_COUNT);
     assert(bsp_button_init(event_cb, &events) == ESP_ERR_INVALID_STATE);
     fail_delete = 0; button_cleanup(); retry_success();
+
     puts("BSP button fault-injection tests: PASS");
 }

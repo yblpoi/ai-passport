@@ -87,6 +87,30 @@ CONFIG_LV_USE_THEME_SIMPLE=n
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
 
+# --- 电源管理 ---
+# 只服务于**手动浅睡**(状态页那条"浅睡眠"与串口 `sleep light`):没有它
+# esp_light_sleep_start() 会直接返回 ESP_ERR_INVALID_STATE(实测)。
+# 空闲路径走的是深睡,不需要它,也不靠它。
+# 注意:FREERTOS_USE_TICKLESS_IDLE 默认仍是关的,也就是说**不会**全系统自动浅睡 ——
+# 本固件只在明确请求时调 esp_light_sleep_start(),这样时序最容易预测。
+CONFIG_PM_ENABLE=y
+# 浅睡时**不要**给 CPU 域断电:`CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP=y`(默认)会把
+# 数字 GPIO 域一起关掉,于是"按键唤醒浅睡"配不上 —— 实测 esp_light_sleep_start() 直接
+# 返回 ESP_ERR_INVALID_STATE(数字 GPIO 中断没了,唤醒源无效)。关掉它以后 CPU 域保持供电,
+# 浅睡的静态电流高一些,但换来按键能可靠唤醒(而且不重启)。
+# CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP is not set
+
+# 深睡的按键唤醒要靠**板上的外部 10k 上拉**把 GPIO0 抬到高电平(三个键按下时该节点是
+# 0/300/595 mV,所以配的是低电平唤醒)。这一项默认是 y,IDF 会在入睡前按唤醒电平再给
+# 这个脚**自动加一层内部上下拉**(esp_hw_support/sleep_modes.c 的
+# gpio_deep_sleep_wakeup_prepare),与板上的外部电阻叠加 —— esp_sleep.h 对这种情况有
+# 明文警告("when using external pull-up or pull-down resistors, please be sure to
+# disable the ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS option, as the combination of
+# internal and external resistors may cause interference")。
+# 症状正是我们踩过的:只要武装按键唤醒,设备就在深睡 2~30 秒后**自己醒来**(黑屏秒醒)。
+# 关掉它,外部上拉说了算。
+CONFIG_ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS=n
+
 # --- 编译器 ---
 # 按体积优化(-Os)。ESP-IDF 默认按调试优化(-Og),会让 app 镜像明显偏大;
 # 本项目的瓶颈在 SPI 刷屏与 I2S DMA,不在 CPU,所以 -Os 不会影响观感与时序。

@@ -20,6 +20,7 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 - [lvgl-chinese-fonts.md](engineering/lvgl-chinese-fonts.md): step-by-step CJK configuration, font generation/linking, fallback examples, glyph checks, and troubleshooting.
 - [wifi-provisioning.md](engineering/wifi-provisioning.md): Bluetooth-based Wi-Fi setup using the BLUFI reference branch, the companion mini program, and integration checks.
 - [serial-screenshot.md](engineering/serial-screenshot.md): capturing the device screen and driving the UI over the serial console (`shot`, `key`, `tools/screenshot.py`).
+- [power-and-idle.md](engineering/power-and-idle.md): blank-off, idle deep sleep, the button wake source, and how to observe a sleeping device.
 
 ## CI
 

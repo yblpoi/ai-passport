@@ -210,3 +210,29 @@ int bsp_button_read_mv(void) {
     if (adc_cali_raw_to_voltage(s_cali, raw, &mv) != ESP_OK) return -1;
     return mv;
 }
+
+static bsp_btn_cb_t s_saved_cb;
+static void *s_saved_user;
+
+esp_err_t bsp_button_suspend(void) {
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    // 记住回调:唤醒源武装失败时 power_sleep 会立刻 bsp_button_resume(),按键得能回来。
+    s_saved_cb = s_cb;
+    s_saved_user = s_user;
+    // 1) 先停掉组件的周期采样(内部定时器),之后不再碰 GPIO0。
+    esp_err_t err = iot_button_stop();
+    // 2) 再把按键与 **ADC 单元/校准** 一起拆掉,让这个脚只受板上外部 10k 上拉驱动。
+    //    为什么必须这样:深睡唤醒盯的就是这个脚的电平,而周期采样和 ADC 的输入网络都会在
+    //    同一个节点上留下瞬变/负载。实测教训是"只停采样还不够,得连输入网络一起拆"。
+    //    (真正让"睡下去几秒自己醒"成立的那一条在 IDF 那边:它默认按唤醒电平给深睡 IO
+    //    自动加内部上下拉,与板上外部上拉叠加 —— 见 sdkconfig.defaults 的
+    //    CONFIG_ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS。两件事要一起做对。)
+    button_cleanup();
+    return err;
+}
+
+esp_err_t bsp_button_resume(void) {
+    if (s_ready) return ESP_OK;
+    if (!s_saved_cb) return ESP_ERR_INVALID_STATE;
+    return bsp_button_init(s_saved_cb, s_saved_user);
+}

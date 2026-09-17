@@ -13,10 +13,12 @@
 #include "love_ble.h"
 #include "love_console_line.h"
 #include "love_event_order.h"
+#include "love_httpd.h"
 #include "love_net.h"
 #include "love_shot.h"
 #include "love_store.h"
 #include "love_time.h"
+#include "power_sleep.h"
 
 #include "bsp_display.h"
 #include "esp_console.h"
@@ -414,6 +416,34 @@ static int cmd_status(void *ctx, int argc, char **argv)
     love_console_out("网络  %s%s%s\n", love_net_state_text(net.state),
                      net.ip[0] ? ", IP " : "", net.ip);
     love_console_out("蓝牙  %s\n", love_ble_state_text());
+    // 熄屏状态只体现在背光上,从截图看不出来(截图读的是帧缓冲)。摆出来才验得了
+    // "熄屏后按任意键只亮屏、不执行动作"这条行为。
+    love_console_out("屏幕  %s\n", love_app_screen_off() ? "已熄屏" : "亮");
+    // "它为什么不睡"必须能被读出来,而不是靠猜:自动深睡要同时满足按键、网页、蓝牙
+    // 三道闸门,而且熄屏档位设成"常亮"时按设计根本不睡。这里把四个数一起摆出来
+    // (最容易被忽略的是手机后台页还在每 10 秒轮询,以及档位是常亮)。
+    const uint32_t web_idle = love_httpd_client_idle_seconds();
+    const uint32_t blank_off = love_app_blank_off_seconds();
+    char web_text[20];
+    char blank_text[16];
+    if (web_idle == UINT32_MAX) snprintf(web_text, sizeof(web_text), "从未请求");
+    else snprintf(web_text, sizeof(web_text), "%u 秒", (unsigned)web_idle);
+    if (blank_off == 0) snprintf(blank_text, sizeof(blank_text), "常亮");
+    else snprintf(blank_text, sizeof(blank_text), "%u 秒", (unsigned)blank_off);
+    love_console_out("空闲  按键 %u 秒(深睡阈 %u) 熄屏档 %s 网页 %s 蓝牙 %s\n",
+                     (unsigned)love_app_idle_seconds(),
+                     (unsigned)love_app_deep_sleep_after_seconds(),
+                     blank_text, web_text,
+                     love_ble_connected() ? "已连接(不睡)" : "无连接");
+    // 本次是上电、定时唤醒还是按键唤醒。深睡时 USB 断电,启动最早那几行日志主机
+    // 常常接不住,所以这个原因只能问接口 —— 验"按键唤醒深睡"就靠它。
+    love_console_out("唤醒  %s\n", power_sleep_wake_text());
+    // 本次若是"上电/复位"(比如刚被主机开串口复位过),把上一次深睡的真实原因也报出来,
+    // 否则那条信息就永远丢了(见 power_sleep_last_deep_wake_text)。
+    if (strcmp(power_sleep_wake_text(), "上电/复位") == 0 &&
+        power_sleep_last_deep_wake_text() != NULL) {
+        love_console_out("深睡  上次由 %s 唤醒\n", power_sleep_last_deep_wake_text());
+    }
 
     // 这两个数比"剩余堆"更能预测网页能不能传大文件:Wi-Fi 驱动发一帧要一块
     // 约 1600 字节的连续内存,连续块不够时页面就传不动。
@@ -460,6 +490,53 @@ static int cmd_key(void *ctx, int argc, char **argv)
     return 0;
 }
 
+// 休眠调试。深睡眠只能从机身状态页那两个操作项触发,而那条路要先走进设置页、
+// 又要按对行 —— 没有屏幕或按键不可靠时根本验不了"睡下去之后是谁把它叫醒的"。
+// 这条命令把状态页那两个操作项搬到串口上(键注入 key 命令是同一个思路)。
+static int cmd_sleep(void *ctx, int argc, char **argv)
+{
+    // **仅 USB**:深睡眠会切断蓝牙与 USB 两条链路,是纯粹的拒绝服务手段。
+    if (!require_usb(src_of(ctx), "休眠调试")) return 1;
+
+    if (argc < 2) {
+        love_console_out("用法: sleep light / sleep deep [秒]"
+                         "(深睡默认 %d 秒定时唤醒,秒数给 0 = 睡到有人按键)\n",
+                         (int)POWER_SLEEP_DEEP_SECONDS);
+        return 1;
+    }
+
+    if (strcmp(argv[1], "light") == 0) {
+        if (power_sleep_light() != ESP_OK) {
+            love_console_out("浅睡眠请求失败。\n");
+            return 1;
+        }
+        love_console_out("开始浅睡眠 %d 秒。\n", (int)POWER_SLEEP_LIGHT_SECONDS);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "deep") == 0) {
+        unsigned long seconds = POWER_SLEEP_DEEP_SECONDS;
+        if (argc >= 3) {
+            char *end = NULL;
+            seconds = strtoul(argv[2], &end, 10);
+            if (end == argv[2] || *end != '\0' || seconds > 86400) {
+                love_console_out("秒数要写成 0~86400 的十进制整数(0 = 睡到有人按键)。\n");
+                return 1;
+            }
+        }
+        // 成功就不会返回(设备直接睡下去,唤醒是一次新的开机),所以下面这句只在失败时打得出来。
+        // **秒数给 0** 是 idle 路径那条形态:只靠机身按键唤醒,可以用来验证"按键能不能叫醒它"。
+        if (love_app_sleep_deep((uint32_t)seconds) != ESP_OK) {
+            love_console_out("深睡眠请求失败(没睡成,详情见日志)。\n");
+            return 1;
+        }
+        love_console_out("开始深睡眠。\n");
+        return 0;
+    }
+
+    love_console_out("用法: sleep light / sleep deep [秒]\n");
+    return 1;
+}
 // 截屏的图是从 USB 串口出去的,蓝牙链路拿不到(150KB 也不适合走通知)。
 static int cmd_shot(void *ctx, int argc, char **argv)
 {
@@ -497,6 +574,7 @@ static const love_command_t COMMANDS[] = {
     // 发布流程按 docs/reference/y2lin/serial-screenshot-protocol.md 发的是这个字面量,
     // 所以它得是一条可用的命令名,而不是只写在文档里的约定。
     { "FAP_SCREENSHOT_V1", "同 shot", cmd_shot },
+    { "sleep",  "调试:sleep light / sleep deep [秒](仅 USB;秒数 0 = 睡到有人按键)", cmd_sleep },
     { "key",    "调试:注入一次按键 key up|down|ok|long(仅 USB)", cmd_key },
     { "help",   "列出所有命令", cmd_help },
 };

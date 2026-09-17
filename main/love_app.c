@@ -122,8 +122,20 @@ static int s_last_day = -1;
 static char s_note[48];
 static int s_note_ttl;
 // 熄屏:最后一次按下的时刻(esp_timer 微秒)与当前是否已熄屏。
+// s_last_input_us 是 64 位、写者又跨任务(见 note_input),所以要整体读写。
 static int64_t s_last_input_us;
+static portMUX_TYPE s_input_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_screen_off;
+// "熄屏够久、没人用,可以睡了"的旗子。由 tick 里的 blank_off_poll() 置起,
+// 由 love_app_idle_poll() 在输入任务上兑现 —— 见那两处的说明。
+static bool s_deep_sleep_due;
+// 上一次"该睡却没睡成"之后的冷却截止时刻(esp_timer 微秒,0 = 没有在冷却)。
+// 没有它的话,失败会在每个 tick 重试一次,而每次重试都要停掉再起回 Wi-Fi。
+static int64_t s_deep_sleep_retry_after_us;
+// "入睡"这件事是否已被某个调用者认领。调用者来自不同任务(input 任务的空闲路径,
+// 以及 USB 控制台的 sleep 命令),见 love_app_sleep_deep。
+static portMUX_TYPE s_sleep_entry_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_sleep_entry_claimed;
 
 // 蓝牙链路上的危险命令要人在机身上按一下确定才执行(见 love_app_confirm_request):
 // 蓝牙是"近场但无需配对"的链路,任何人在旁边连上就能敲命令。结论用信号量交给
@@ -373,10 +385,19 @@ static void format_event_line(char *out, size_t size, const love_event_t *event,
     snprintf(out, size, "农历%s %s", lunar_text, solar);
 }
 
-/* ---------- 自动熄屏 ---------- */
+/* ---------- 自动熄屏 / 熄屏后自动深睡 ---------- */
 // 放在设置页之前:build_settings() 要用 blank_off_index() 显示当前档位。
 
 #define BL_ON_LEVEL 80
+
+// 熄屏之后再多长时间没人动就进深睡。**取官方的 5 分钟**:官方参考固件(铃声挂件 v1.4.0)
+// 的实测口径就是"空闲 5 分钟入睡、任意按键唤醒"(见
+// docs/reference/shinku-chen/deep-sleep-peripheral-power-off.md)。我们照这个级别做,
+// 不比它更激进。
+//
+// 之所以在熄屏之后再等一段:熄屏只是关背光,这一段是留给"刚走开还想再看一眼"的;
+// 真睡下去是一次重启(内存不保持、USB 串口会断、要重新联网),不该那么急。
+#define IDLE_DEEP_SLEEP_S 300
 
 static uint16_t blank_off_seconds(void)
 {
@@ -399,9 +420,28 @@ static void blank_off_index_step(int delta)
 }
 
 // 记住"最近一次操作",熄屏计时从这里算起。
+//
+// 写者不止一个任务:LVGL 任务(按键/确认页)、input 任务(love_app_key)、以及
+// **USB 控制台任务**(debug 命令会调 love_app_set_debug)。所以这个 64 位量必须整体读写
+// —— C3 是 32 位机,int64 的存取可能被撕成两次,读到一个"半新半旧"的值就会让熄灭/入睡的
+// 计时跳到任意时刻。两个访问器都用同一把 portMUX 包住。
 static void note_input(void)
 {
+    taskENTER_CRITICAL(&s_input_lock);
     s_last_input_us = esp_timer_get_time();
+    taskEXIT_CRITICAL(&s_input_lock);
+    // 有人动过就不再是"该睡了":熄屏后按任意键会走到这里(哪怕只点亮屏幕),
+    // 深睡眠的判定要跟着重来。
+    s_deep_sleep_due = false;
+}
+
+// 距"最近一次操作"过了多少微秒。
+static int64_t input_idle_us(void)
+{
+    taskENTER_CRITICAL(&s_input_lock);
+    const int64_t last = s_last_input_us;
+    taskEXIT_CRITICAL(&s_input_lock);
+    return esp_timer_get_time() - last;
 }
 
 static void screen_wake(void)
@@ -415,20 +455,48 @@ static void screen_off(void)
 {
     if (s_screen_off) return;
     s_screen_off = true;
+    // 熄屏一律回到主屏。熄屏之后多半会进深睡眠,而醒来是一次新的开机,用户看到的第一屏
+    // 应该是"在一起多少天",而不是他上次翻到的那张事件卡或设置页。
+    // (render() 在这里是安全的:它只被 LVGL 任务与持锁的按键路径调用,本函数也在其中。)
+    if (s_view != VIEW_MAIN) {
+        s_view = VIEW_MAIN;
+        s_sel = 0;
+        s_note[0] = '\0';
+        render();
+    }
     bsp_display_backlight(0);
 }
 
-// 每 tick 检查一次是否该熄屏。0 = 常亮,不熄。
+// 每 tick 检查一次:该熄屏就熄屏,熄屏够久没人动就举手说"可以深睡了"。
+// 0 = 常亮:既不熄屏,也就不自动深睡 —— 用户明确要求一直亮着时,睡觉不该是他的意思。
+//
+// 真正执行深睡眠的是 love_app_idle_poll(),**不是这里**:tick 跑在 LVGL 任务上且
+// 持着 LVGL 锁,而入睡前要停 BLE/HTTP/Wi-Fi,那条路会等 NimBLE host 任务退出、
+// 还要回调进来刷新界面,在持锁的任务上做不安全。
 static void blank_off_poll(void)
 {
+
     uint16_t limit = blank_off_seconds();
     if (limit == 0) {
+        // 常亮 = 明确要求屏幕一直亮着,那也顺带取消掉"该睡了"的举手。
         screen_wake();
+        s_deep_sleep_due = false;
         return;
     }
-    if (s_screen_off) return;
-    int64_t idle_us = esp_timer_get_time() - s_last_input_us;
-    if (idle_us >= (int64_t)limit * 1000000LL) screen_off();
+    const int64_t idle_us = input_idle_us();
+    if (!s_screen_off) {
+        if (idle_us >= (int64_t)limit * 1000000LL) screen_off();
+        return;
+    }
+    if (s_deep_sleep_due) return;
+    // 熄屏 + 无人操作满 IDLE_DEEP_SLEEP_S(按"最后一次有人动"起算,不是从熄屏那一刻起算)。
+    if (idle_us < (int64_t)IDLE_DEEP_SLEEP_S * 1000000LL) return;
+    // 手机上还开着后台页时不能睡:机身没人碰不代表没人在用设备。页面每 10 秒轮询一次
+    // 状态,所以"网页也安静了这么久"就足以说明对方确实走了。
+    if (love_httpd_client_idle_seconds() < IDLE_DEEP_SLEEP_S) return;
+    // 蓝牙控制台连着手机时同样不睡:那是一次正在进行的会话,睡下去等于把它掐掉。
+    if (love_ble_connected()) return;
+    s_deep_sleep_due = true;
 }
 
 /* ---------- 设置页 ---------- */
@@ -1449,20 +1517,12 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         (void)power_sleep_light();
         break;
     case ACT_SLEEP_DEEP:
-        // 深睡眠前必须交出 Wi-Fi/BLE/HTTP:它们持有射频与 socket,
-        // 不停止就睡会让重启后的外设状态不确定。失败则把服务起回来,
-        // 别把应用留在"网也没了、觉也没睡成"的状态。
-        if (love_app_stop() != ESP_OK) {
-            (void)love_app_start();
-            break;
-        }
-        if (power_sleep_deep() != ESP_OK) {
-            (void)love_app_start();
-            if (bsp_lvgl_lock(300)) {
-                s_note[0] = '\0';
-                render();
-                bsp_lvgl_unlock();
-            }
+        // 与"熄屏后空闲自动深睡"走同一条路(见 love_app_sleep_deep)。
+        // 失败时清掉提示并重绘,让用户看到界面还在。
+        if (love_app_sleep_deep(POWER_SLEEP_DEEP_SECONDS) != ESP_OK && bsp_lvgl_lock(300)) {
+            s_note[0] = '\0';
+            render();
+            bsp_lvgl_unlock();
         }
         break;
     case ACT_BACK:
@@ -1479,6 +1539,131 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 
 /* ---------- 生命周期 ---------- */
 
+// 认领/放开"由本模块发起的这次入睡"。为什么要一把锁在前:调用者来自两个不同任务
+// (input 任务的空闲路径,以及 USB 控制台的 sleep 命令),而"停服务 → 入睡"是不可逆的。
+// 第二个到达者必须立刻退出,并且**绝不能**去 love_app_start() —— 那会把第一个调用者
+// 正在关的 Wi-Fi/BLE/HTTP 又打开,正好破坏"入睡前必须停服务"这条契约。
+static bool claim_sleep_entry(void)
+{
+    bool claimed = false;
+    taskENTER_CRITICAL(&s_sleep_entry_lock);
+    if (!s_sleep_entry_claimed) {
+        s_sleep_entry_claimed = true;
+        claimed = true;
+    }
+    taskEXIT_CRITICAL(&s_sleep_entry_lock);
+    return claimed;
+}
+
+static void release_sleep_entry(void)
+{
+    taskENTER_CRITICAL(&s_sleep_entry_lock);
+    s_sleep_entry_claimed = false;
+    taskEXIT_CRITICAL(&s_sleep_entry_lock);
+}
+
+// 请求一次深睡眠:先交出 Wi-Fi/BLE/HTTP(它们持有射频与 socket,不停止就睡会让重启后的
+// 外设状态不确定),再让 power_sleep 武装按键唤醒、按顺序停外设。失败就把服务起回来,
+// 别把应用留在"网也没了、觉也没睡成"的状态。
+//
+// wake_seconds = 0 表示**只用机身按键唤醒**(idle 路径要的形态:睡到有人按键为止)。
+//
+// **必须在非 LVGL 任务上调用**:love_ble_stop() 是无超时等 NimBLE host 任务退出的。
+// 设置页那条"深睡眠"、空闲自动深睡、以及串口的 sleep 调试命令都走这里。
+// 返回 ESP_OK 表示"已经过了会失败的那一段、正在入睡"(这时不会再有返回的机会);
+// 返回错误表示**这次没睡成**,而且已经尝试把服务与界面恢复回去。认领没拿到时也返回错误,
+// 那种情况下没有动过任何东西。
+esp_err_t love_app_sleep_deep(uint32_t wake_seconds)
+{
+    if (!claim_sleep_entry()) return ESP_ERR_INVALID_STATE;
+    if (power_sleep_busy()) {
+        release_sleep_entry();
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (love_app_stop() != ESP_OK) {
+        release_sleep_entry();
+        (void)love_app_start();
+        return ESP_FAIL;
+    }
+    const esp_err_t err = power_sleep_deep_for(wake_seconds);
+    if (err != ESP_OK) {
+        release_sleep_entry();
+        (void)love_app_start();
+        return err;
+    }
+
+    // 请求送进工作线程只说明"排上队了",不代表已经睡着。等它走到"唤醒源已武装"那一步
+    // (power_sleep_committed):那一步之前失败会返回,之后只有睡下去与重启两种结局。
+    // 这一步是入睡前最早的几步之一,所以窗口不用长。
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(POWER_SLEEP_ARM_GRACE_MS);
+    while (!power_sleep_committed() && power_sleep_busy() &&
+           xTaskGetTickCount() < deadline) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (!power_sleep_committed()) {
+        // 没得到确认:要么武装失败(工作线程已把 busy 落下),要么迟迟没走到那一步。
+        // 两种情况都按"没睡成"处理 —— 最坏也只是把服务多起一次(设备随后就重启),
+        // 而反过来猜错会留下"网停了、觉也没睡成",只能断电恢复。
+        ESP_LOGE(TAG, "深睡没有得到确认(唤醒源未武装),把网络与界面起回来");
+        release_sleep_entry();
+        (void)love_app_start();
+        return ESP_FAIL;
+    }
+    // 已经在往睡里走了:认领**不还**。设备会重启,标志跟着复位。
+    return ESP_OK;
+}
+
+// 熄屏后长时间无人操作 → 进入**深睡**,由机身任意按键唤醒。
+// **必须在非 LVGL 任务上调用**(main.c 的 input 任务每秒调一次)。
+//
+// 为什么是深睡:它是唯一"叫得醒、又不会自己醒"的形态,功耗也最低;代价是醒来是一次重启
+// (内存不保持、USB 串口会断、要重新联网)。以前这里走过浅睡,已按官方口径改回深睡 ——
+// 深睡的按键唤醒之所以曾经不可靠,根因是 IDF 默认给深睡 IO 按唤醒电平自动加内部上下拉,
+// 与板上外部 10k 上拉叠加(sleep_modes.c / esp_sleep.h 的原文见 power_sleep.c 与
+// sdkconfig.defaults),不是本板电平的问题。
+void love_app_idle_poll(void)
+{
+    if (!s_deep_sleep_due) return;
+    s_deep_sleep_due = false;
+    if (power_sleep_busy()) return;
+    // 刚失败过就先别试:没人动的状态一直成立,不冷却的话这个函数每秒都会被叫一次,
+    // 而每次尝试都要停掉再起回 Wi-Fi —— 那会变成"每秒断网一次"的循环,比不睡更糟。
+    const int64_t now_us = esp_timer_get_time();
+    if (now_us < s_deep_sleep_retry_after_us) return;
+
+    ESP_LOGI(TAG, "熄屏后无人操作满 %d 秒,进入深睡(机身按键唤醒)", IDLE_DEEP_SLEEP_S);
+    // 0 = 不设定时器。定时唤醒会让设备每隔一段自己重启一次,那不是休眠,是重启循环。
+    if (love_app_sleep_deep(0) != ESP_OK) {
+        s_deep_sleep_retry_after_us = esp_timer_get_time() + (int64_t)IDLE_DEEP_SLEEP_S * 1000000LL;
+        if (bsp_lvgl_lock(300)) {
+            // 服务已被 love_app_sleep_deep 起回来:把提示清掉重绘,让用户看到界面还在。
+            s_note[0] = '\0';
+            s_render_request = true;
+            bsp_lvgl_unlock();
+        }
+    }
+}
+
+bool love_app_screen_off(void)
+{
+    return s_screen_off;
+}
+
+uint32_t love_app_idle_seconds(void)
+{
+    const int64_t idle_us = input_idle_us();
+    return idle_us > 0 ? (uint32_t)(idle_us / 1000000) : 0;
+}
+
+uint32_t love_app_deep_sleep_after_seconds(void)
+{
+    return IDLE_DEEP_SLEEP_S;
+}
+
+uint32_t love_app_blank_off_seconds(void)
+{
+    return blank_off_seconds();
+}
 
 bool love_app_confirm_request(const char *action, uint32_t timeout_ms)
 {

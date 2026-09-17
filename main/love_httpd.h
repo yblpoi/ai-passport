@@ -10,6 +10,7 @@
 #include "esp_err.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 
 // 配置被后台改动后回调(在 HTTP 任务上下文执行),应用用它刷新设备界面。
 typedef void (*love_httpd_changed_cb_t)(void);
@@ -17,3 +18,8 @@ void love_httpd_set_changed_cb(love_httpd_changed_cb_t cb);
 
 esp_err_t love_httpd_start(void);
 void love_httpd_stop(void);
+
+// 距离最近一次网页请求过去了多少秒;一次请求都没来过时返回 UINT32_MAX。
+// 应用用它判断"还有没有人在用后台页"—— 有人正在网页上编辑时不能因为机身没被碰过
+// 就把设备睡掉(那会把对方未保存的改动连同会话一起丢掉)。
+uint32_t love_httpd_client_idle_seconds(void);

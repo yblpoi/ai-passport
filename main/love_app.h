@@ -10,12 +10,41 @@
 #include "esp_err.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 
 void love_app_enter(void);
 void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev);
 esp_err_t love_app_start(void);
 esp_err_t love_app_stop(void);
 
+// 空闲检查:熄屏后长时间无人操作就进深睡眠。调用方必须是**非 LVGL 任务**
+// (main.c 的 input 任务每秒调一次),理由见 love_app.c 里本函数的说明。
+void love_app_idle_poll(void);
+
+// 请求一次深睡眠(成功则设备很快睡下去;唤醒是一次重启)。
+// wake_seconds = 0 表示只用机身按键唤醒(idle 路径:睡到有人按键为止);非 0 则同时设
+// RTC 定时器(wake_seconds 秒后自己醒来,状态页那条操作与串口调试用)。
+// 先交出 Wi-Fi/BLE/HTTP。返回值:**ESP_OK = 已经过了会失败的那一段、正在入睡**;
+// 其它值 = 这次没睡成,而且服务与界面已经被恢复回去(调用方按需重绘提示即可)。
+// 同时只允许一个调用者走这条路,第二个到达者立刻拿到 ESP_ERR_INVALID_STATE 并且不会
+// 去动服务(**不会**把对方正在关的东西又打开)。
+// 设置页那条"深睡眠"、空闲自动深睡、串口 sleep 调试命令共用它。
+// **必须在非 LVGL 任务上调用**(关 BLE 会无超时等 NimBLE host 任务退出)。
+esp_err_t love_app_sleep_deep(uint32_t wake_seconds);
+
+// 屏幕是否处于熄屏状态(背光已关)。熄屏与"熄屏后按任意键只亮屏、不执行动作"
+// 这两条行为只能从背光上看出来,串口 status 用它把状态摆出来。
+bool love_app_screen_off(void);
+
+// 距最后一次按键过了多少秒,以及自动深睡的阈值(秒)。
+// 深睡要同时满足三道闸门(按键静了、网页静了、蓝牙没连着),只看"屏幕熄了"回答不了
+// "它为什么不睡" —— 最容易被忽略的两道是手机后台页还在轮询、以及熄屏档位被设成了常亮
+// (常亮按设计同时关掉深睡)。串口 status 把这几个数一起摆出来,让这个问题可以被读出来。
+uint32_t love_app_idle_seconds(void);
+uint32_t love_app_deep_sleep_after_seconds(void);
+
+// 当前的自动熄屏档位(秒;0 = 常亮,同时意味着不会自动深睡)。
+uint32_t love_app_blank_off_seconds(void);
 
 // 请求一次"机身确认":屏幕弹出确认页,短按确定 = 允许,长按确定或超时 = 拒绝。
 // 返回 true 表示允许执行。**可以在非 LVGL 任务上调用**(内部自己取锁),

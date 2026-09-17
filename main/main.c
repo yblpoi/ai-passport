@@ -14,6 +14,7 @@
 #include "bsp_i2c.h"
 #include "bsp_pins.h"      // 错误日志里要打印 BSP_LCD_* 引脚号
 #include "love_app.h"
+#include "power_sleep.h"
 
 #include "esp_log.h"
 #include "esp_sleep.h"
@@ -42,9 +43,17 @@ static void input_task(void *arg)
     (void)arg;
     input_event_t input;
     for (;;) {
-        if (xQueueReceive(s_input_queue, &input, portMAX_DELAY) == pdTRUE) {
+        // **不要**改成 portMAX_DELAY:无限阻塞的任务会被 FreeRTOS 从所有链表里摘掉,
+        // 于是 xTaskGetHandle("input") 永远找不到它 —— 而串口 `status` 正是靠这个
+        // 打印各任务的栈余,这条"机身按键 → 整屏重绘"的路恰恰是最该盯着的一条。
+        // 一秒一次空转的代价可以忽略,顺带还是空闲检查(深睡眠)的心跳。
+        if (xQueueReceive(s_input_queue, &input, pdMS_TO_TICKS(1000)) == pdTRUE) {
             love_app_key(input.btn, input.event);
+            continue;
         }
+        // 熄屏后长时间无人操作就睡下去。放在本任务上做,因为入睡要停 BLE/HTTP/Wi-Fi,
+        // 而 love_ble_stop() 会无超时等 NimBLE host 任务退出 —— 不能在 LVGL 任务上做。
+        love_app_idle_poll();
     }
 }
 
@@ -76,6 +85,9 @@ void app_main(void)
     if (wakeup != ESP_SLEEP_WAKEUP_UNDEFINED) {
         ESP_LOGI(TAG, "休眠唤醒原因: %d", wakeup);
     }
+    // 抄一份唤醒原因进 RTC 内存:主机开一次串口就可能复位芯片,复位后实时寄存器
+    // 就变"上电/复位"了(见 power_sleep.h)。
+    power_sleep_note_boot();
 
     bsp_i2c_init();
     bsp_i2c_scan();

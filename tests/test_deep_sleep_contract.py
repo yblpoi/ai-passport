@@ -54,6 +54,7 @@ class DeepSleepContractTest(unittest.TestCase):
         cls.display = read("components/bsp/src/bsp_display.c")
         cls.i2c = read("components/bsp/src/bsp_i2c.c")
         cls.power_sleep = read("main/power_sleep.c")
+        cls.love_app = read("main/love_app.c")
 
     def test_es8311_force_sleep_sequence_is_complete_and_ordered(self) -> None:
         expected = [
@@ -152,6 +153,79 @@ class DeepSleepContractTest(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertLess(body.index("bsp_lvgl_lock(1000)"),
                         body.index("bsp_display_prepare_deep_sleep()"))
+
+    def test_wake_source_is_armed_and_checked_before_the_teardown(self) -> None:
+        # 唤醒源要**先武装、再关外设**,而且返回值必须被检查:官方参考文档记过一个坑 ——
+        # 忽略 esp_deep_sleep_enable_gpio_wakeup() 的返回值,芯片会在**没有任何唤醒源**的
+        # 情况下睡下去,表现为"睡下去再也醒不来",只能断电救。所以武装失败的分支必须在
+        # 任何一次性关外设之前就退出。
+        body = function_body(self.power_sleep, "run_deep_sleep")
+        # 按键采样必须停在武装之前:采样与 ADC 输入网络会给唤醒脚注入瞬变。
+        self.assertLess(body.index("bsp_button_suspend()"), body.index("arm_button_wake()"))
+        self.assertLess(body.index("arm_button_wake()"), body.index("bsp_battery_sleep()"))
+        self.assertLess(body.index("arm_button_wake()"), body.index("esp_deep_sleep_start()"))
+        # 失败路径(装回按键)排在所有关外设之前 —— 也就是"没配上唤醒源就不睡"。
+        self.assertLess(body.index("bsp_button_resume()"), body.index("bsp_battery_sleep()"))
+
+    def test_button_wake_uses_a_pin_bitmask_on_the_shared_adc_node(self) -> None:
+        # 三个按键共用一个 ADC 节点,所以一条低电平唤醒源覆盖全部三个键。
+        # 两个 GPIO API 的参数都是**位掩码**而不是脚号:传脚号等于空掩码,唤醒源装不上。
+        body = function_body(self.power_sleep, "arm_button_wake")
+        self.assertIn("1ULL << BSP_BTN_GPIO", body)
+        self.assertIn("ESP_GPIO_WAKEUP_GPIO_LOW", body)
+        self.assertIn("GPIO_MODE_INPUT", body)
+        # 返回值必须往上传,由 run_deep_sleep 决定不睡。
+        self.assertIn("return esp_deep_sleep_enable_gpio_wakeup(", body)
+
+    def test_internal_sleep_resistors_are_disabled_for_the_external_pullup(self) -> None:
+        # 板上给自己的 10k 上拉把唤醒脚抬到高电平。IDF 默认(CONFIG_...=y)会在入睡前按
+        # 唤醒电平**再自动加一层内部上下拉**(esp_hw_support/sleep_modes.c 的
+        # gpio_deep_sleep_wakeup_prepare),esp_sleep.h 对"外部上下拉 + 这个选项"有明文警告。
+        # 这一行一旦被删掉,这个脚在睡眠期间的状态就有两个来源,而它没有别的测试能发现。
+        defaults = read("sdkconfig.defaults")
+        self.assertIn("CONFIG_ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS=n", defaults)
+
+    def test_resolved_sdkconfig_agrees_when_it_exists(self) -> None:
+        # 上面那条只钉住 defaults,而构建真正读的是被 gitignore 的本机 sdkconfig
+        # (本仓库踩过"defaults 改了但 sdkconfig 陈旧、配置静默失效"的坑)。存在就一起核对。
+        resolved = ROOT / "sdkconfig"
+        if not resolved.is_file():
+            return
+        text = resolved.read_text(encoding="utf-8", errors="replace")
+        self.assertIn("# CONFIG_ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS is not set", text)
+
+    def test_idle_path_uses_the_official_five_minutes_and_no_timer(self) -> None:
+        # 空闲路径的形态就是这次改动的目的:官方那 5 分钟,而且**不设定时器** ——
+        # 睡到有人按键为止。定时唤醒会让设备每隔一段自己重启一次,那是重启循环不是休眠。
+        self.assertRegex(self.love_app, r"#define\s+IDLE_DEEP_SLEEP_S\s+300\b")
+        # 这里**不用** function_body():它靠正则配对花括号,而这个函数名在注释里也出现过
+        # (`blank_off_poll` 的说明里就引了它),会取到隔壁函数的函数体(踩过)。用整句锚定。
+        self.assertRegex(
+            self.love_app,
+            r"if \(love_app_sleep_deep\(0\) != ESP_OK\)",
+        )
+        # 三道闸门里的网页那一道:手机挂着后台页时即便屏幕已熄也不能睡。
+        self.assertRegex(
+            self.love_app,
+            r"if \(love_httpd_client_idle_seconds\(\) < IDLE_DEEP_SLEEP_S\) return;",
+        )
+
+    def test_deep_sleep_arms_the_timer_only_when_a_duration_is_given(self) -> None:
+        # wake_seconds = 0 必须真的**不**武装定时器:写反了 idle 路径就会变成每 5 秒自重启。
+        body = function_body(self.power_sleep, "run_deep_sleep")
+        before_start = body[:body.index("esp_deep_sleep_start()")]
+        self.assertRegex(
+            before_start,
+            r"if \(s_deep_seconds != 0\)\s*\{[^}]*esp_sleep_enable_timer_wakeup",
+        )
+
+    def test_button_wake_leaves_the_shared_adc_node_without_internal_pulls(self) -> None:
+        # bsp_pins.h 明文警告:这个分压节点不能改用内部上拉(约 45k、精度差,会把三档电平
+        # 挤到一起并随温漂重叠)。所以武装唤醒时只能把脚配成输入,不能给它加内部上下拉。
+        body = function_body(self.power_sleep, "arm_button_wake")
+        self.assertIn("GPIO_PULLUP_DISABLE", body)
+        self.assertIn("GPIO_PULLDOWN_DISABLE", body)
+        self.assertNotIn("GPIO_PULLUP_ENABLE", body)
 
 
 if __name__ == "__main__":

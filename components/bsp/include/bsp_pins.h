@@ -54,6 +54,12 @@
 #define BSP_BTN_ADC_CHANNEL  ADC_CHANNEL_0    // GPIO0
 #define BSP_BTN_COUNT        3
 
+// 同一个 ADC 节点的 GPIO 号。深睡眠的按键唤醒要用它:三键按下时这个点是
+// 0 / 300 / 595 mV,都低于 ESP32-C3 的数字低电平门限(约 825 mV),松开态是 3300 mV,
+// 所以按【低电平】配一条唤醒源就能让三个键都唤醒(见 power_sleep.c)。
+// GPIO0 是 C3 的 RTC GPIO,具备深睡唤醒能力。
+#define BSP_BTN_GPIO         0
+
 // 每键的电压窗口 {min_mV, max_mV};边界取相邻档中点。
 // 确定键上界留宽到 1900,是为了和松开态的 3300mV 拉开距离。
 #define BSP_BTN_MV_TABLE  { {0, 150}, {150, 447}, {447, 1900} }

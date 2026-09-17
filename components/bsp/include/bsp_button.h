@@ -31,3 +31,15 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user);
 // ★ 换了分压/上拉阻值后,用它测出自己的三档电压,再改 bsp_pins.h 的 BSP_BTN_MV_TABLE。
 // 读取失败返回 -1。
 int bsp_button_read_mv(void);
+
+// 把按键**整套**挂起:停掉周期采样,并拆掉按键与 ADC 单元/校准(见 .c 里的实测说明)。
+// **深睡眠前必须调用**:三键共用 GPIO0,而深睡的按键唤醒是"该脚低电平"触发的;
+// 只要这个脚还挂在 ADC 的输入网络上,采样与输入网络就会给这个节点注入瞬变,而唤醒源
+// 盯的就是电平本身 —— 顺序反了就会睡下去立刻被自己叫醒(实测请求睡 120 秒、约 2 秒后
+// 醒来,原因报"按键唤醒")。
+// 唤醒源武装失败时调用方会立刻 bsp_button_resume() 把它装回来(见 power_sleep.c:
+// "没配上唤醒源就不睡"),所以恢复路径必须有、且要能重建回调。
+esp_err_t bsp_button_suspend(void);
+
+// 把 bsp_button_suspend() 拆掉的东西按原回调重建回来。
+esp_err_t bsp_button_resume(void);

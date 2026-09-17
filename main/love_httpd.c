@@ -14,6 +14,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -28,6 +29,24 @@ static const char *TAG = "love_httpd";
 
 static httpd_handle_t s_server;
 static love_httpd_changed_cb_t s_changed_cb;
+// 最近一次请求的时刻(esp_timer 微秒)。两个出口 send_blob() 与 send_json() 都记一笔,
+// 所以每个处理器都被覆盖到,不必在十几处各写一行。0 = 还没来过请求。
+static volatile int64_t s_last_request_us;
+
+// 每个响应都经过这里或 send_json():网页还在被人用时,应用据此推迟自动深睡眠。
+static void note_client_activity(void)
+{
+    s_last_request_us = esp_timer_get_time();
+}
+
+uint32_t love_httpd_client_idle_seconds(void)
+{
+    const int64_t last = s_last_request_us;
+    if (last == 0) return UINT32_MAX;
+    const int64_t idle_us = esp_timer_get_time() - last;
+    if (idle_us <= 0) return 0;
+    return (uint32_t)(idle_us / 1000000);
+}
 
 void love_httpd_set_changed_cb(love_httpd_changed_cb_t cb)
 {
@@ -41,6 +60,7 @@ static void notify_changed(void)
 
 static esp_err_t send_json(httpd_req_t *req, cJSON *root, const char *status)
 {
+    note_client_activity();
     // root 可能是 NULL:state_to_json() 里的整份配置是堆上要来的,要不到就直接报 500,
     // 别把 NULL 递给 cJSON。
     if (!root) {
@@ -290,6 +310,7 @@ static esp_err_t finish(httpd_req_t *req)
 static esp_err_t send_blob(httpd_req_t *req, const char *type, const void *data,
                            size_t length, bool cacheable)
 {
+    note_client_activity();
     httpd_resp_set_type(req, type);
     httpd_resp_set_hdr(req, "Cache-Control",
                        cacheable ? "public, max-age=3600" : "no-store");

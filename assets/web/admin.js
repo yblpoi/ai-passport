@@ -41,27 +41,42 @@ function nearestPaletteIndex(r, g, b){
 
 // 选中的图片 -> 40x40、量化到 16 色、打成 4bpp(每字节两个像素,高半字节在前)。
 // 先居中裁成正方形再缩放,避免把脸拉扁。
+//
+// 用 <img> 而不是 createImageBitmap 解码:iPhone 相册默认是 HEIC,Safari 的
+// createImageBitmap 对它的支持比 <img> 窄得多;走 <img> 就是走浏览器自己的
+// 图像管线,手机直接拍的照片也能选。解码失败时给一句人话,不要把原始异常抛到
+// toast 里。
 async function compressAvatar(file){
-  const bitmap = await createImageBitmap(file);
-  const side = Math.min(bitmap.width, bitmap.height);
-  const canvas = document.createElement("canvas");
-  canvas.width = AVA; canvas.height = AVA;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(bitmap,
-                (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side,
-                0, 0, AVA, AVA);
-  const px = ctx.getImageData(0, 0, AVA, AVA).data;
+  const url = URL.createObjectURL(file);
+  try {
+    const bitmap = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("浏览器解不开这张图片，试试转成 PNG 或 JPEG"));
+      el.src = url;
+    });
 
-  const out = new Uint8Array(AVATAR_BYTES);
-  for(let i = 0; i < AVA * AVA; i++){
-    // 近乎透明的像素直接给白色(索引 1 = W),免得压出脏边
-    const idx = px[i*4 + 3] >= 128
-      ? nearestPaletteIndex(px[i*4], px[i*4 + 1], px[i*4 + 2])
-      : 1;
-    if(i % 2 === 0) out[i >> 1] = idx << 4;
-    else out[i >> 1] |= idx;
+    const w = bitmap.naturalWidth, h = bitmap.naturalHeight;
+    const side = Math.min(w, h);
+    const canvas = document.createElement("canvas");
+    canvas.width = AVA; canvas.height = AVA;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bitmap, (w - side) / 2, (h - side) / 2, side, side, 0, 0, AVA, AVA);
+    const px = ctx.getImageData(0, 0, AVA, AVA).data;
+
+    const out = new Uint8Array(AVATAR_BYTES);
+    for(let i = 0; i < AVA * AVA; i++){
+      // 近乎透明的像素直接给白色(索引 1 = W),免得压出脏边
+      const idx = px[i*4 + 3] >= 128
+        ? nearestPaletteIndex(px[i*4], px[i*4 + 1], px[i*4 + 2])
+        : 1;
+      if(i % 2 === 0) out[i >> 1] = idx << 4;
+      else out[i >> 1] |= idx;
+    }
+    return out;
+  } finally {
+    URL.revokeObjectURL(url);
   }
-  return out;
 }
 
 // 设备回传的 4bpp base64 -> 可直接显示的 data URI(选择器里的缩略图)
@@ -118,13 +133,21 @@ async function clearAvatar(slot){
   return res.json();
 }
 
+// 常驻一个已挂进文档的隐藏文件选择器。
+// 不要像早先那样每次现造一个游离的 input 再 click():iOS Safari 会忽略对
+// 未挂载元素的 click(),表现就是"第一次点了没反应,要再点一次"。
+const avatarInput = document.createElement("input");
+avatarInput.type = "file";
+avatarInput.accept = "image/*";
+avatarInput.hidden = true;
+document.body.appendChild(avatarInput);
+
 // 触发文件选择 -> 压缩 -> 上传。成功后把该槽位设为当前选中图标。
 function pickAvatarFile(onDone){
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "image/*";
-  input.onchange = async () => {
-    const file = input.files && input.files[0];
+  // 先清空,否则连续两次选同一个文件不会触发 change
+  avatarInput.value = "";
+  avatarInput.onchange = async () => {
+    const file = avatarInput.files && avatarInput.files[0];
     if(!file) return;
     try{
       await onDone(file);
@@ -132,7 +155,7 @@ function pickAvatarFile(onDone){
       toast("上传失败：" + e.message);
     }
   };
-  input.click();
+  avatarInput.click();
 }
 
 /* 与设备 love_date.c 一致的规则：目标是“下一次发生日”，在一起天数含当天。 */

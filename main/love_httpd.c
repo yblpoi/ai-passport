@@ -367,6 +367,9 @@ static esp_err_t handle_avatar(httpd_req_t *req)
     if (love_store_save_avatar((uint8_t)slot, data) != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "保存头像失败");
     }
+    // 成功也留一行:上传是 800 字节的二进制 POST,失败了页面只弹一个 toast,
+    // 设备侧要是也不说话,"没上传"和"上传成功"在日志里就分不出来。
+    ESP_LOGI(TAG, "头像已保存: 槽位 %d", slot);
     return finish(req);
 }
 

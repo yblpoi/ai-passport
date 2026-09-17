@@ -79,6 +79,14 @@ pixel heart wallpaper. Only these three sizes are allowed.
   level-1 glyphs account for roughly 17 KB of that.
 - Generate and register additional sizes separately instead of switching to a
   full CJK family to add a single character.
+- Note: the generated files carry an `Opts:` header comment holding the absolute
+  paths used at generation time (`lv_font_conv` writes `--font` and `--output`
+  verbatim, which is normal). On a different machine, or after the checkout moves,
+  that path will not match the repository location. It is provenance metadata only
+  and does not affect glyph data, which depends solely on the font file, symbol
+  set, size and bpp. Re-run the command above to refresh it; do not hand-edit
+  generated files. The symbol set can be copied verbatim out of the existing
+  `Opts:` line.
 
 ### ark12-subset.woff2 (kept for reference; the admin page no longer uses it)
 

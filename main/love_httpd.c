@@ -41,6 +41,12 @@ static void notify_changed(void)
 
 static esp_err_t send_json(httpd_req_t *req, cJSON *root, const char *status)
 {
+    // root 可能是 NULL:state_to_json() 里的整份配置是堆上要来的,要不到就直接报 500,
+    // 别把 NULL 递给 cJSON。
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json");
+        return ESP_FAIL;
+    }
     char *text = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!text) {
@@ -163,8 +169,8 @@ static cJSON *config_to_json(const love_config_t *cfg)
     cJSON_AddStringToObject(root, "start", buf);
     // 自动熄屏秒数,0 = 常亮。后台页据此回填下拉框。
     cJSON_AddNumberToObject(root, "blankOff", cfg->blank_off_seconds);
-    // 展示模式(列表/单页)与蓝牙开关。
-    cJSON_AddNumberToObject(root, "displayMode", cfg->display_mode);
+    // 展示方式从 v4 起是每个事件自己的字段(见下面 events 里的 viewMode),
+    // 不再有全局开关。这里也不再回 displayMode —— 后台页上的全局选择器已经去掉。
     cJSON_AddBoolToObject(root, "bleEnabled", cfg->ble_enabled != 0);
 
     cJSON *people = cJSON_AddArrayToObject(root, "people");
@@ -183,6 +189,7 @@ static cJSON *config_to_json(const love_config_t *cfg)
         cJSON_AddNumberToObject(item, "icon", event->icon);
         cJSON_AddNumberToObject(item, "kind", event->kind);
         cJSON_AddStringToObject(item, "category", event->category);
+        cJSON_AddNumberToObject(item, "viewMode", event->view_mode);
         if (event->kind == LOVE_EVENT_LUNAR) {
             // 农历事件用独立的月/日字段,不伪造一个公历日期
             cJSON_AddNumberToObject(item, "lunarMonth", event->date.month);
@@ -198,8 +205,12 @@ static cJSON *config_to_json(const love_config_t *cfg)
 
 static cJSON *state_to_json(void)
 {
-    love_config_t cfg;
-    love_store_load_config(&cfg);
+    // 一份 love_config_t 有 1454 字节(v4 起最多 24 条事件)。httpd 任务的栈还要装
+    // cJSON 与"配置变更时整屏重绘"的调用链,这类读一眼就丢的整份配置一律走堆 ——
+    // 串口控制台任务就是因为同样的一份配置放在栈上而栈溢出的(实测)。
+    love_config_t *cfg = malloc(sizeof(*cfg));
+    if (!cfg) return NULL;
+    love_store_load_config(cfg);
 
     love_time_state_t time_state;
     love_time_get(&time_state);
@@ -213,7 +224,7 @@ static cJSON *state_to_json(void)
     // 真机右上角显示的电量，取不到时为 -1。
     cJSON_AddNumberToObject(root, "battery", bsp_battery_soc());
 
-    cJSON_AddItemToObject(root, "config", config_to_json(&cfg));
+    cJSON_AddItemToObject(root, "config", config_to_json(cfg));
 
     cJSON *time = cJSON_AddObjectToObject(root, "time");
     char described[48] = { 0 };
@@ -252,6 +263,7 @@ static cJSON *state_to_json(void)
             cJSON_AddItemToArray(avatars, cJSON_CreateString(""));
         }
     }
+    free(cfg);
     return root;
 }
 
@@ -378,37 +390,27 @@ static esp_err_t handle_avatar_clear(httpd_req_t *req)
     return finish(req);
 }
 
-static esp_err_t handle_config(httpd_req_t *req)
+// 把网页传来的 JSON 叠到 cfg 上。字段缺失时**保留原值** —— 浏览器缓存的旧 admin.js
+// 不带 category / viewMode / bleEnabled,一次保存就把用户分好的类或挑好的展示方式
+// 抹掉是不能接受的。
+static void apply_config_json(const cJSON *root, love_config_t *cfg)
 {
-    love_net_ap_touch();
-
-    cJSON *root = NULL;
-    if (!read_json(req, &root)) return ESP_FAIL;
-
-    love_config_t cfg;
-    love_store_load_config(&cfg);
-
     const cJSON *start = cJSON_GetObjectItem(root, "start");
     if (cJSON_IsString(start)) {
         love_date_t parsed;
-        if (love_date_parse(start->valuestring, &parsed)) cfg.start = parsed;
+        if (love_date_parse(start->valuestring, &parsed)) cfg->start = parsed;
     }
 
     // 只接受已知档位,别让网页写入任意秒数。
     const cJSON *blank = cJSON_GetObjectItem(root, "blankOff");
     if (cJSON_IsNumber(blank) && love_blank_off_valid((uint16_t)blank->valueint)) {
-        cfg.blank_off_seconds = (uint16_t)blank->valueint;
+        cfg->blank_off_seconds = (uint16_t)blank->valueint;
     }
 
-    // 展示模式与蓝牙开关:字段缺失或取值非法时保留原值 —— 浏览器缓存的旧
-    // admin.js 不带这些字段,一次保存就把设置抹掉是不能接受的。
-    const cJSON *mode = cJSON_GetObjectItem(root, "displayMode");
-    if (cJSON_IsNumber(mode) &&
-        (mode->valueint == (int)LOVE_DISPLAY_LIST || mode->valueint == (int)LOVE_DISPLAY_PAGE)) {
-        cfg.display_mode = (uint8_t)mode->valueint;
-    }
+    // 蓝牙开关:字段缺失时保留原值 —— 浏览器缓存的旧 admin.js 不带这个字段,
+    // 一次保存就把设置抹掉是不能接受的。
     const cJSON *ble = cJSON_GetObjectItem(root, "bleEnabled");
-    if (cJSON_IsBool(ble)) cfg.ble_enabled = cJSON_IsTrue(ble) ? 1 : 0;
+    if (cJSON_IsBool(ble)) cfg->ble_enabled = cJSON_IsTrue(ble) ? 1 : 0;
 
     const cJSON *people = cJSON_GetObjectItem(root, "people");
     if (cJSON_IsArray(people)) {
@@ -419,11 +421,11 @@ static esp_err_t handle_config(httpd_req_t *req)
             const cJSON *name = cJSON_GetObjectItem(person, "name");
             const cJSON *icon = cJSON_GetObjectItem(person, "icon");
             if (cJSON_IsString(name)) {
-                snprintf(cfg.people[index].name, sizeof(cfg.people[index].name), "%s",
+                snprintf(cfg->people[index].name, sizeof(cfg->people[index].name), "%s",
                          name->valuestring);
             }
             if (cJSON_IsNumber(icon) && icon->valueint >= 0 && icon->valueint < LOVE_ICON_TOTAL) {
-                cfg.people[index].icon = (uint8_t)icon->valueint;
+                cfg->people[index].icon = (uint8_t)icon->valueint;
             }
             index++;
         }
@@ -442,13 +444,17 @@ static esp_err_t handle_config(httpd_req_t *req)
             const cJSON *lunar_month = cJSON_GetObjectItem(item, "lunarMonth");
             const cJSON *lunar_day = cJSON_GetObjectItem(item, "lunarDay");
             const cJSON *category = cJSON_GetObjectItem(item, "category");
+            const cJSON *view = cJSON_GetObjectItem(item, "viewMode");
 
-            love_event_t *event = &cfg.events[count];
-            // 旧缓存页面不带 category:按同下标保留老值,别把用户分好的类抹掉。
-            // (旧页面的顺序也是它自己那份,所以同下标就是同一条事件。)
+            love_event_t *event = &cfg->events[count];
+            // 旧缓存页面不带 category / viewMode:按同下标保留老值,别把用户分好的类
+            // 或挑好的展示方式抹掉。(旧页面的顺序也是它自己那份,同下标就是同一条。)
             char keep_category[LOVE_CATEGORY_MAX];
             love_utf8_copy(keep_category, sizeof(keep_category),
-                           count < cfg.event_count ? cfg.events[count].category : "");
+                           count < cfg->event_count ? cfg->events[count].category : "");
+            const uint8_t keep_view = (count < cfg->event_count)
+                                          ? cfg->events[count].view_mode
+                                          : LOVE_EVENT_VIEW_LIST;
             memset(event, 0, sizeof(*event));
             if (cJSON_IsString(name)) {
                 snprintf(event->name, sizeof(event->name), "%s", name->valuestring);
@@ -456,6 +462,11 @@ static esp_err_t handle_config(httpd_req_t *req)
             if (event->name[0] == '\0') snprintf(event->name, sizeof(event->name), "纪念日");
             love_utf8_copy(event->category, sizeof(event->category),
                            cJSON_IsString(category) ? category->valuestring : keep_category);
+            event->view_mode = (cJSON_IsNumber(view) &&
+                                (view->valueint == (int)LOVE_EVENT_VIEW_LIST ||
+                                 view->valueint == (int)LOVE_EVENT_VIEW_PAGE))
+                                   ? (uint8_t)view->valueint
+                                   : keep_view;
             if (cJSON_IsNumber(icon) && icon->valueint >= 0 && icon->valueint < LOVE_ICON_TOTAL) {
                 event->icon = (uint8_t)icon->valueint;
             }
@@ -472,7 +483,7 @@ static esp_err_t handle_config(httpd_req_t *req)
                 // 塞进 date 字符串会带一个没意义的年份,反而容易看错。
                 const int month = cJSON_IsNumber(lunar_month) ? lunar_month->valueint : 1;
                 const int day = cJSON_IsNumber(lunar_day) ? lunar_day->valueint : 1;
-                event->date = (love_date_t){ cfg.start.year,
+                event->date = (love_date_t){ cfg->start.year,
                                              (int8_t)((month >= 1 && month <= 12) ? month : 1),
                                              (int8_t)((day >= 0 && day <= 30) ? day : 1) };
             } else {
@@ -480,17 +491,36 @@ static esp_err_t handle_config(httpd_req_t *req)
                 if (cJSON_IsString(date) && love_date_parse(date->valuestring, &parsed)) {
                     event->date = parsed;
                 } else {
-                    event->date = cfg.start;
+                    event->date = cfg->start;
                 }
             }
             count++;
         }
-        cfg.event_count = count;
+        cfg->event_count = count;
     }
 
+}
+
+static esp_err_t handle_config(httpd_req_t *req)
+{
+    love_net_ap_touch();
+
+    cJSON *root = NULL;
+    if (!read_json(req, &root)) return ESP_FAIL;
+
+    // 一份 love_config_t 是 1454 字节。这条路径上还要叠着 cJSON、保存、以及配置变更
+    // 回调里的整屏重绘 —— 放栈上实测直接把 httpd 任务(6KB 栈)顶穿,所以走堆。
+    love_config_t *cfg = malloc(sizeof(*cfg));
+    if (!cfg) {
+        cJSON_Delete(root);
+        return send_error(req, "500 Internal Server Error", "内存不足");
+    }
+    love_store_load_config(cfg);
+    apply_config_json(root, cfg);
     cJSON_Delete(root);
 
-    esp_err_t err = love_store_save_config(&cfg);
+    esp_err_t err = love_store_save_config(cfg);
+    free(cfg);
     if (err != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "保存配置失败");
     }

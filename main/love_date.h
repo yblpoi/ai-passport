@@ -12,8 +12,20 @@
 #define LOVE_NAME_MAX 25
 // 分类名与事件名同宽:都是 8 个汉字。
 #define LOVE_CATEGORY_MAX 25
-// 设备端最多保存的事件条目数(与 lovestore 的 NVS 记录一一对应)。
-#define LOVE_EVENT_MAX 8
+// 设备端最多保存的事件条目数。
+// 上限由两件事共同决定,不是随便挑的:
+//   1. 整份记录要能一次塞进 NVS blob —— IDF 的 blob 上限约 4000 字节,每条事件
+//      约 58 字节,24 条连头部一起才 ~1.5KB,离上限还很远;
+//   2. 好几处都拿 love_config_t 做局部变量(控制台 4KB 栈、HTTP 任务 6KB 栈),
+//      结构体一大就会把任务栈吃掉。
+// 24 是这个固件上"够用且到处都放得下"的数;真要再放大,得先把那几处局部变量改掉。
+#define LOVE_EVENT_MAX 24
+
+// 每个事件自己决定怎么展示(v4 起;v3 是全局一个展示模式)。
+//   列表 = 出现在事件列表屏里,一屏 4 条分页;
+//   单页 = 自己独占一屏,按上/下在单页事件之间翻。
+#define LOVE_EVENT_VIEW_LIST 0u
+#define LOVE_EVENT_VIEW_PAGE 1u
 // 主屏底部的两个人。
 #define LOVE_PERSON_MAX 2
 // 内置像素图标数量(love_icons.c)。
@@ -44,15 +56,8 @@ typedef struct {
     love_date_t date;           // YEARLY/LUNAR 只用 month/day,ONCE 用完整日期
                                 // (LUNAR 时 month/day 是农历)
     char category[LOVE_CATEGORY_MAX];   // 用户自定义的分类名,空串 = 不分类
+    uint8_t view_mode;                  // LOVE_EVENT_VIEW_*,见上
 } love_event_t;
-
-// 日期编辑界面里被选中的字段。
-enum {
-    LOVE_FIELD_YEAR = 0,
-    LOVE_FIELD_MONTH,
-    LOVE_FIELD_DAY,
-    LOVE_FIELD_COUNT,
-};
 
 // 倒计时结果。
 typedef struct {
@@ -82,10 +87,6 @@ love_date_t love_next_occurrence(love_date_t today, int month, int day);
 
 // 事件倒计时。YEARLY 用 month/day 折算;ONCE 用完整日期;LUNAR 按农历月日折算。
 love_countdown_t love_event_countdown(const love_event_t *event, love_date_t today);
-
-// 编辑日期:field 见 LOVE_FIELD_*,delta 通常为 ±1。
-// 月按 1..12 循环、日按当月天数循环、年夹在 1970..2099。
-love_date_t love_date_step(love_date_t d, int field, int delta);
 
 // 写 "YYYY-MM-DD" 到 buf,需要至少 11 字节;不足时写入空串。
 void love_date_format(love_date_t d, char *buf, size_t size);

@@ -29,6 +29,7 @@
 #include "lvgl.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // 方舟像素字体(Ark Pixel)12px 的整数倍字号:12 / 24 / 36。
@@ -103,12 +104,14 @@ static lv_font_t s_font_24;
 
 static love_config_t s_cfg;
 static int s_view = VIEW_MAIN;
-static int s_edit_field = -1;
 static int s_sel;
-// 列表屏的显示序:s_order[i] 是 s_cfg.events 的下标,顺序由 love_event_order 决定。
-// 它随"今天"变化(组内按远近排),所以每次进列表或重绘前都重算一次,8 条最多。
-static uint8_t s_order[LOVE_EVENT_MAX];
-static int s_order_count;
+// 两组显示序(v4 起每个事件自己挑展示方式):列表屏只收"列表"事件,单页卡只认
+// "单页"事件。顺序由 love_event_order 决定,随"今天"变化(组内按远近排),
+// 所以每次进列表/重绘前都重算一次 —— 最多二十几条,代价可忽略。
+static uint8_t s_list_order[LOVE_EVENT_MAX];
+static int s_list_count;
+static uint8_t s_page_order[LOVE_EVENT_MAX];
+static int s_page_count;
 static bool s_services_ready;
 static bool s_store_ready;
 static int s_last_day = -1;
@@ -324,19 +327,8 @@ static void format_date_line(char *out, size_t size, const char *prefix, love_da
         snprintf(out, size, "%s %s", prefix, "");
         return;
     }
-
-    const int year = date.year, month = date.month, day = date.day;
-    if (s_edit_field < 0) {
-        snprintf(out, size, "%s %04d-%02d-%02d", prefix, year, month, day);
-        return;
-    }
-    if (s_edit_field == 0) {
-        snprintf(out, size, "%s 【%04d】-%02d-%02d", prefix, year, month, day);
-    } else if (s_edit_field == 1) {
-        snprintf(out, size, "%s %04d-【%02d】-%02d", prefix, year, month, day);
-    } else {
-        snprintf(out, size, "%s %04d-%02d-【%02d】", prefix, year, month, day);
-    }
+    snprintf(out, size, "%s %04d-%02d-%02d", prefix, (int)date.year, (int)date.month,
+             (int)date.day);
 }
 
 // 事件卡的目标日期行。农历事件要同时给出"农历几月几号"和折算出的公历日期 ——
@@ -345,27 +337,12 @@ static void format_event_line(char *out, size_t size, const love_event_t *event,
                               const love_countdown_t *countdown, bool unresolved)
 {
     if (event->kind != LOVE_EVENT_LUNAR) {
-        format_date_line(out, size, s_edit_field >= 0 ? "日期" : "目标日",
-                         s_edit_field >= 0 ? event->date : countdown->target);
+        format_date_line(out, size, "目标日", countdown->target);
         return;
     }
 
     char lunar_text[24];
     love_lunar_format(event->date.month, event->date.day, lunar_text, sizeof(lunar_text));
-
-    if (s_edit_field >= 0) {
-        // 编辑态用【】标出正在改的是月还是日;日按数字显示,0 写作"末"(除夕那种月末)
-        char day_text[8];
-        if (event->date.day == 0) snprintf(day_text, sizeof(day_text), "末");
-        else snprintf(day_text, sizeof(day_text), "%d", (int)event->date.day);
-
-        if (s_edit_field == 0) {
-            snprintf(out, size, "农历 【%d】月%s", (int)event->date.month, day_text);
-        } else {
-            snprintf(out, size, "农历 %d月【%s】", (int)event->date.month, day_text);
-        }
-        return;
-    }
 
     if (unresolved) {
         snprintf(out, size, "农历%s", lunar_text);
@@ -676,24 +653,59 @@ static void handle_status_key(bsp_btn_t btn, bsp_btn_ev_t ev, action_t *action)
     }
 }
 
-/* ---------- 渲染 ---------- */
+/* ---------- 视图环与列表屏 ---------- */
 
-/* ---------- 列表屏 ---------- */
-
-// 重算显示序。分组不需要时间,组内按远近排序需要,所以 holds 为 false 时只有分组生效。
+// 重算两组显示序:列表屏只收"列表"事件,单页卡只认"单页"事件,各自排序。
+// 分组不需要时间,组内按远近排序需要,所以 holds 为 false 时只有分组生效。
 static void rebuild_order(love_date_t today, bool holds)
 {
-    s_order_count = (int)love_event_order_build(s_cfg.events, s_cfg.event_count,
-                                                today, holds, s_order, sizeof(s_order));
+    s_list_count = (int)love_event_order_build(s_cfg.events, s_cfg.event_count,
+                                               LOVE_EVENT_VIEW_LIST, today, holds,
+                                               s_list_order, sizeof(s_list_order));
+    s_page_count = (int)love_event_order_build(s_cfg.events, s_cfg.event_count,
+                                               LOVE_EVENT_VIEW_PAGE, today, holds,
+                                               s_page_order, sizeof(s_page_order));
 }
 
-// 某条事件在显示序里的位置;不在其中时返回 -1。
-static int order_position(int raw_index)
+// 某条事件在某一组里的位置;不在其中返回 -1。
+static int position_in(const uint8_t *order, int count, int raw_index)
 {
-    for (int i = 0; i < s_order_count; i++) {
-        if (s_order[i] == raw_index) return i;
+    for (int i = 0; i < count; i++) {
+        if (order[i] == raw_index) return i;
     }
     return -1;
+}
+
+// 视图环上的站位:先是列表屏的每一行(0..s_list_count-1),再是每个单页事件
+// (s_list_count .. s_list_count+s_page_count-1)。**主屏不在环上** —— 走到两头就回
+// 主屏,也就是"循环直到切回主页"。不在环上(比如已经从列表点开了某条)返回 -1。
+static int ring_position(void)
+{
+    if (s_view == VIEW_LIST) {
+        return (s_sel >= 0 && s_sel < s_list_count) ? s_sel : -1;
+    }
+    if (s_view > VIEW_MAIN) {
+        const int pos = position_in(s_page_order, s_page_count, s_view - 1);
+        if (pos >= 0) return s_list_count + pos;
+    }
+    return -1;
+}
+
+// 走到环上的某个站位;越界就是"回主屏"。
+static void goto_ring(int pos)
+{
+    const int total = s_list_count + s_page_count;
+    if (pos < 0 || pos >= total) {
+        s_view = VIEW_MAIN;
+    } else if (pos < s_list_count) {
+        s_view = VIEW_LIST;
+        s_sel = pos;
+    } else {
+        // 单页事件的 s_view 用"原下标 + 1"编码,与主屏 0 不冲突。
+        s_view = s_page_order[pos - s_list_count] + 1;
+    }
+    s_note[0] = '\0';
+    render();
 }
 
 // 列表右列的天数文案。算不出来(没对时 / 农历超表)写 "--",与事件卡的说法一致,
@@ -729,81 +741,60 @@ static int category_width(const char *text)
     return width;
 }
 
-// 进列表屏。from_end 为 true 时把光标放到最后一条(主屏按上键进来的路径)。
-static void enter_list(bool from_end)
+// 从列表点开的那条单页卡:在**列表那一组**里翻,翻到头回列表(光标停在刚才那条)。
+// 这是"列表里按确定看一眼"的路径,不改变这条事件的展示方式。
+static void move_in_list_group(int delta)
 {
-    love_date_t today = { 0, 0, 0 };
-    const bool holds = time_today(&today);
-    rebuild_order(today, holds);
-
-    s_sel = (from_end && s_order_count > 0) ? s_order_count - 1 : 0;
-    s_view = VIEW_LIST;
-    s_note[0] = '\0';
-    render();
-}
-
-// 卡片上/下翻页。列表模式下顺序跟着列表走,走到头回列表;单页模式维持改造前的环形。
-static void move_card(int delta)
-{
-    if (s_cfg.display_mode == LOVE_DISPLAY_LIST) {
-        love_date_t today = { 0, 0, 0 };
-        const bool holds = time_today(&today);
-        rebuild_order(today, holds);
-
-        const int pos = order_position(s_view - 1);
-        if (pos >= 0) {
-            const int next = pos + delta;
-            if (next < 0 || next >= s_order_count) {
-                // 越过两端就回列表,光标停在刚才看的那条上,接着选。
-                s_sel = pos;
-                s_view = VIEW_LIST;
-            } else {
-                s_view = s_order[next] + 1;
-            }
-        }
-    } else {
-        const int count = (int)s_cfg.event_count;
-        if (delta > 0) s_view = (s_view >= count) ? VIEW_MAIN : s_view + 1;
-        else s_view = (s_view <= VIEW_MAIN) ? count : s_view - 1;
-        if (s_view < 0) s_view = VIEW_MAIN;   // 一条事件都没有
-    }
-    s_note[0] = '\0';
-    render();
-}
-
-static void handle_list_key(bsp_btn_t btn, bsp_btn_ev_t ev)
-{
-    love_date_t today = { 0, 0, 0 };
-    const bool holds = time_today(&today);
-    rebuild_order(today, holds);
-
-    // 事件可能在别处被删光(后台网页),回主屏而不是停在一张空列表上。
-    if (s_order_count == 0) {
-        s_view = VIEW_MAIN;
+    const int pos = position_in(s_list_order, s_list_count, s_view - 1);
+    if (pos < 0) {
+        // 这条已经不在列表组里了(后台把它改成了单页、或者删了):退回列表,
+        // 别把用户留在一张既不在环上、也回不去的卡片上。
+        s_view = (s_list_count > 0) ? VIEW_LIST : VIEW_MAIN;
+        s_sel = 0;
         s_note[0] = '\0';
         render();
         return;
     }
-    if (s_sel >= s_order_count) s_sel = s_order_count - 1;
-    if (s_sel < 0) s_sel = 0;
 
-    if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
-        s_sel = (s_sel <= 0) ? s_order_count - 1 : s_sel - 1;
-        render();
-    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
-        s_sel = (s_sel + 1 >= s_order_count) ? 0 : s_sel + 1;
-        render();
-    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
-        // 打开这一条的单页卡。s_view 用"原下标 + 1"编码,与主屏 0 不冲突。
-        s_view = s_order[s_sel] + 1;
-        s_note[0] = '\0';
-        render();
-    } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-        s_sel = 0;
-        s_view = VIEW_SETTINGS;
-        s_note[0] = '\0';
-        render();
+    const int next = pos + delta;
+    if (next < 0 || next >= s_list_count) {
+        s_sel = pos;
+        s_view = VIEW_LIST;
+    } else {
+        s_view = s_list_order[next] + 1;
     }
+    s_note[0] = '\0';
+    render();
+}
+
+static void open_settings(void)
+{
+    s_sel = 0;
+    s_view = VIEW_SETTINGS;
+    s_note[0] = '\0';
+    render();
+}
+
+// 列表屏与单页卡上的按键:两者都在视图环上,上/下就是环上前后一格。
+static void handle_ring_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+{
+    const int pos = ring_position();
+
+    if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
+        goto_ring(pos < 0 ? 0 : pos + 1);
+    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
+        goto_ring(pos < 0 ? 0 : pos - 1);
+    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK && s_view == VIEW_LIST) {
+        // 列表里按确定 = 看这一条的完整单页卡(倒计时、目标日都看得更清楚)。
+        if (s_sel >= 0 && s_sel < s_list_count) {
+            s_view = s_list_order[s_sel] + 1;
+            s_note[0] = '\0';
+            render();
+        }
+    } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+        open_settings();
+    }
+    // 单页卡上的确定键**什么都不做**:机身上没有改日期的入口,日期一律在后台网页改。
 }
 
 static void render(void)
@@ -830,6 +821,16 @@ static void render(void)
 
     love_date_t today = { 0, 0, 0 };
     bool holds = time_today(&today);
+
+    // 两组分组顺序每次重绘都算一遍:它们随"今天"变(组内按远近排),也随后台改配置变。
+    rebuild_order(today, holds);
+
+    // 事件可能在后台被删了,当前位置就失效了 —— 收敛回主屏。
+    // **只判下标越界**:从列表点开一张"列表"事件的卡片是合法视图(它不是环上的站,
+    // 但也不该被弹走),这里不能顺手把它也当成非法。
+    if (s_view > VIEW_MAIN && s_view - 1 >= (int)s_cfg.event_count) {
+        s_view = VIEW_MAIN;
+    }
 
     // 右上角电量;取不到时显示 "--",不阻塞界面。
     // 状态页已经单列一行电量,不再重复画一个。
@@ -875,13 +876,12 @@ static void render(void)
     }
 
     if (s_view == VIEW_LIST) {
-        rebuild_order(today, holds);
-        // 事件可能在后台网页上被删光。此时不能停在一张空列表上,直接落回主屏
-        // (不 return,让下面主屏那条分支接着画)。
-        if (s_order_count == 0) {
+        // "列表"事件可能在后台网页上被删光或被改成单页。此时不能停在一张空列表上,
+        // 直接落回主屏(不 return,让下面主屏那条分支接着画)。
+        if (s_list_count == 0) {
             s_view = VIEW_MAIN;
         } else {
-            const int pages = (s_order_count + LIST_PAGE_ROWS - 1) / LIST_PAGE_ROWS;
+            const int pages = (s_list_count + LIST_PAGE_ROWS - 1) / LIST_PAGE_ROWS;
             const int page = s_sel / LIST_PAGE_ROWS + 1;
             s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
             lv_label_set_text_fmt(s_page, "%d/%d", page, pages);
@@ -890,9 +890,9 @@ static void render(void)
             const int first = (page - 1) * LIST_PAGE_ROWS;
             for (int row = 0; row < LIST_PAGE_ROWS; row++) {
                 const int pos = first + row;
-                if (pos >= s_order_count) break;
+                if (pos >= s_list_count) break;
 
-                const love_event_t *event = &s_cfg.events[s_order[pos]];
+                const love_event_t *event = &s_cfg.events[s_list_order[pos]];
                 const int row_top = LIST_ROW_TOP + row * LIST_ROW_PITCH;
                 const bool selected = (pos == s_sel);
 
@@ -984,11 +984,13 @@ static void render(void)
         date_obj = cjk_small(s_scr, text, COL_WHITE);
         lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 250);
 
-        // 列表模式下上/下是"进列表",提示要跟着改,否则用户按下去会以为走错了屏。
-        hint_obj = cjk_small(s_scr, s_cfg.display_mode == LOVE_DISPLAY_LIST
-                                       ? "上/下 列表 · 长按确定 设置"
-                                       : "上/下 切换 · 长按确定 设置",
-                             COL_WHITE);
+        // 上/下 会进环上的第一个站:有"列表"事件时是列表屏,否则直接翻单页卡。
+        // 提示跟着实际情况改,别让用户按下去以为走错了屏。
+        const char *main_hint = "上/下 列表 · 长按确定 设置";
+        if (s_list_count == 0) {
+            main_hint = (s_page_count > 0) ? "上/下 切换 · 长按确定 设置" : "长按确定 设置";
+        }
+        hint_obj = cjk_small(s_scr, main_hint, COL_WHITE);
         lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
         lv_screen_load(s_scr);
         return;
@@ -1000,8 +1002,17 @@ static void render(void)
     if (index >= s_cfg.event_count) index = s_cfg.event_count - 1;
     const love_event_t *event = &s_cfg.events[index];
 
+    // 页码按"这条属于哪一组"算:单页事件报它在单页里的位置,从列表点开的报它在列表
+    // 里的位置。直接拿事件总表的下标去报(比如"3/8")对用户没有任何意义 ——
+    // v4 起两种展示方式各成一组。
+    const uint8_t *group = (event->view_mode == LOVE_EVENT_VIEW_PAGE) ? s_page_order
+                                                                      : s_list_order;
+    const int group_count = (event->view_mode == LOVE_EVENT_VIEW_PAGE) ? s_page_count
+                                                                      : s_list_count;
+    const int group_pos = position_in(group, group_count, index);
     s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
-    lv_label_set_text_fmt(s_page, "%d/%d", index + 1, (int)s_cfg.event_count);
+    lv_label_set_text_fmt(s_page, "%d/%d", group_pos >= 0 ? group_pos + 1 : index + 1,
+                          group_count > 0 ? group_count : 1);
     lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
 
     // 这一屏的纵向坐标同样整块下移过:内容只占 166px,原来从 y=40 起,
@@ -1025,7 +1036,7 @@ static void render(void)
     const bool unresolved = holds && lunar && !countdown.resolved;
 
     add_big_number(s_scr, countdown.days >= 0 ? countdown.days : -countdown.days,
-                   holds && s_edit_field < 0 && !unresolved, 158);
+                   holds && !unresolved, 158);
 
     const char *unit;
     if (!holds) unit = "未同步";
@@ -1039,10 +1050,8 @@ static void render(void)
     date_obj = cjk_small(s_scr, date_text, COL_WHITE);
     lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 222);
 
-    hint_obj = cjk_small(s_scr,
-                         s_edit_field >= 0 ? "上+1 下换位 确定保存"
-                                           : (lunar ? "确定 改农历日期" : "确定 改日期"),
-                         COL_WHITE);
+    // 卡片上不再能改日期(日期一律在后台网页改),所以提示只说怎么走。
+    hint_obj = cjk_small(s_scr, "上/下 翻卡 · 长按确定 设置", COL_WHITE);
     lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
 
     if (s_note[0]) {
@@ -1069,7 +1078,7 @@ static void refresh_dynamic(void)
         int index = s_view - 1;
         const love_event_t *event = &s_cfg.events[index];
         love_date_t today;
-        if (time_today(&today) && s_edit_field < 0 && s_big) {
+        if (time_today(&today) && s_big) {
             love_countdown_t countdown = love_event_countdown(event, today);
             if (!countdown.resolved) {
                 // 农历年份超出数据表:数字置回占位符,别显示上次算出来的旧值
@@ -1171,12 +1180,19 @@ static void on_config_changed(void)
     // 网页上的蓝牙开关只写配置;不在这里收敛的话要等下次重启才生效(实测踩过)。
     // 这里**不能**走 love_app_set_ble():它会把整个 s_cfg 写回 NVS,而 s_cfg 还是
     // 网页保存之前的旧配置,等于把用户刚改的东西抹掉。
-    love_config_t next;
-    love_store_load_config(&next);
-    if (ble_apply(next.ble_enabled != 0) != ESP_OK) ESP_LOGW(TAG, "蓝牙开关未对齐");
+    // 这份配置走堆:本函数是在 httpd 任务的栈上被回调的,而它后面还要接一整屏
+    // LVGL 重绘 —— 1454 字节的配置压在栈上实测会把 httpd 任务顶穿。
+    love_config_t *next = malloc(sizeof(*next));
+    if (!next) return;
+    love_store_load_config(next);
+    if (ble_apply(next->ble_enabled != 0) != ESP_OK) ESP_LOGW(TAG, "蓝牙开关未对齐");
 
-    if (!bsp_lvgl_lock(500)) return;
-    s_cfg = next;
+    if (!bsp_lvgl_lock(500)) {
+        free(next);
+        return;
+    }
+    s_cfg = *next;
+    free(next);
     if (s_view > (int)s_cfg.event_count) s_view = s_cfg.event_count;
     render();
     bsp_lvgl_unlock();
@@ -1231,7 +1247,6 @@ static void handle_settings_key(bsp_btn_t btn, bsp_btn_ev_t ev, action_t *action
 void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     action_t action = ACT_NONE;
-    bool persist = false;
 
     // 熄屏状态下,任意键先只负责"亮屏",不再顺带触发该键的动作 ——
     // 否则用户想看一眼天数,一按就把日期改了。
@@ -1256,97 +1271,34 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         handle_settings_key(btn, ev, &action);
     } else if (s_view == VIEW_STATUS) {
         handle_status_key(btn, ev, &action);
-    } else if (s_view == VIEW_LIST) {
-        handle_list_key(btn, ev);
-    } else if (s_edit_field >= 0) {
-        // 编辑模式:上键 +1、下键换字段、确定键保存。
-        // 农历事件的月日走 love_lunar_step：农历月长不是公历的 28/30/31。
-        const bool lunar_edit = (s_view > VIEW_MAIN)
-                                && (s_cfg.events[s_view - 1].kind == LOVE_EVENT_LUNAR);
-        love_date_t *target = (s_view == VIEW_MAIN)
-                                  ? &s_cfg.start
-                                  : &s_cfg.events[s_view - 1].date;
-        if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
-            if (lunar_edit) {
-                int month = target->month;
-                int day = target->day;
-                love_lunar_step(&month, &day, s_edit_field == 0 ? 0 : 1, 1);
-                target->month = (int8_t)month;
-                target->day = (int8_t)day;
-            } else {
-                *target = love_date_step(*target, s_edit_field, 1);
-            }
-            render();
-        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
-            // 农历只编"月 / 日"两个字段,不编年份(年份对农历节日没有意义)。
-            s_edit_field = (s_edit_field + 1) % (lunar_edit ? 2 : LOVE_FIELD_COUNT);
-            render();
-        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
-            s_edit_field = -1;
-            persist = true;
-            set_note("已保存");
-            render();
-        } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-            // 放弃修改:重新载入设备里的配置。
-            love_store_load_config(&s_cfg);
-            s_edit_field = -1;
-            set_note("已放弃修改");
-            render();
-        }
     } else if (s_view == VIEW_MAIN) {
-        // 主屏。列表模式:上/下进列表(下键从头、上键从尾);单页模式:维持改造前的
-        // 主屏 ↔ 事件卡环形,不进列表。
-        const bool list_mode = (s_cfg.display_mode == LOVE_DISPLAY_LIST);
+        // 主屏。上/下 进视图环(下键从头、上键从尾)。机身上**不再提供任何改日期的
+        // 入口**:日期、分类、展示方式一律在后台网页改,这里连确定键都不做动作。
         if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
-            if (list_mode) {
-                enter_list(false);
-            } else {
-                s_view = (s_cfg.event_count > 0) ? 1 : VIEW_MAIN;
-                s_note[0] = '\0';
-                render();
-            }
+            goto_ring(0);
         } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
-            if (list_mode) {
-                enter_list(true);
-            } else {
-                s_view = (int)s_cfg.event_count;   // 一条也没有时就是主屏自己
-                s_note[0] = '\0';
-                render();
-            }
-        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
-            s_edit_field = 0;
-            set_note("");
-            render();
+            goto_ring(s_list_count + s_page_count - 1);
         } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-            s_sel = 0;
-            s_view = VIEW_SETTINGS;
-            s_note[0] = '\0';
-            render();
+            open_settings();
         }
     } else {
-        // 事件卡(s_view 是"原下标 + 1")。
-        if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
-            move_card(1);
-        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
-            move_card(-1);
-        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
-            s_edit_field = 0;
-            set_note("");
-            render();
-        } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-            s_sel = 0;
-            s_view = VIEW_SETTINGS;
-            s_note[0] = '\0';
-            render();
+        // 列表屏或单页卡。列表里点开的那条"列表"事件虽然不在环上,但它的上/下走的是
+        // 列表那一组(见 move_in_list_group),所以这里要分开判。
+        const bool list_event_card = (s_view > VIEW_MAIN) &&
+                                     (s_cfg.events[s_view - 1].view_mode != LOVE_EVENT_VIEW_PAGE);
+        if (list_event_card) {
+            if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
+                move_in_list_group(1);
+            } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
+                move_in_list_group(-1);
+            } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+                open_settings();
+            }
+        } else {
+            handle_ring_key(btn, ev);
         }
     }
     bsp_lvgl_unlock();
-
-    if (persist) {
-        if (love_store_save_config(&s_cfg) != ESP_OK) {
-            ESP_LOGW(TAG, "配置保存失败");
-        }
-    }
 
     // 慢操作放在 LVGL 锁外执行。
     switch (action) {
@@ -1402,7 +1354,6 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             render();
             bsp_lvgl_unlock();
         }
-        // 注意:persist 在 switch 之前就处理过了,这里必须自己落盘。
         if (love_store_save_config(&s_cfg) != ESP_OK) {
             ESP_LOGW(TAG, "熄屏设置保存失败");
         }
@@ -1469,7 +1420,6 @@ void love_app_enter(void)
     love_store_load_config(&s_cfg);
 
     s_view = VIEW_MAIN;
-    s_edit_field = -1;
     s_sel = 0;
     s_last_day = -1;
     s_screen_off = false;

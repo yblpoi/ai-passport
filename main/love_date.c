@@ -120,34 +120,6 @@ love_countdown_t love_event_countdown(const love_event_t *event, love_date_t tod
     return out;
 }
 
-love_date_t love_date_step(love_date_t d, int field, int delta)
-{
-    if (!love_date_valid(d)) return d;
-
-    if (field == LOVE_FIELD_YEAR) {
-        int year = d.year + delta;
-        if (year < 1970) year = 1970;
-        if (year > 2099) year = 2099;
-        d.year = (int16_t)year;
-    } else if (field == LOVE_FIELD_MONTH) {
-        int month = d.month + delta;
-        while (month < 1) month += 12;
-        while (month > 12) month -= 12;
-        d.month = (int8_t)month;
-    } else if (field == LOVE_FIELD_DAY) {
-        int length = love_days_in_month(d.year, d.month);
-        int day = d.day + delta;
-        while (day < 1) day += length;
-        while (day > length) day -= length;
-        d.day = (int8_t)day;
-    }
-
-    // 年份变化后当月天数可能变短(2 月),把日期夹回合法范围。
-    int length = love_days_in_month(d.year, d.month);
-    if (d.day > length) d.day = (int8_t)length;
-    return d;
-}
-
 void love_date_format(love_date_t d, char *buf, size_t size)
 {
     if (!buf || size == 0) return;

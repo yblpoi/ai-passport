@@ -14,6 +14,7 @@
 #include "love_console_line.h"
 #include "love_event_order.h"
 #include "love_net.h"
+#include "love_shot.h"
 #include "love_store.h"
 #include "love_time.h"
 
@@ -199,14 +200,49 @@ static int cmd_time(void *ctx, int argc, char **argv)
     return 0;
 }
 
-// 列表屏的显示序。设备屏幕上看不出"为什么是这个顺序",改完分类或网页上的顺序后
-// 敲 status 就能核对分组与组内排序 —— 列表屏的分页/光标/翻卡都建在这个顺序上,
+// 几个关键任务的剩余栈(字节)。v4 起一个 love_config_t 就是 1454 字节,而它是整份
+// 落在调用它的任务栈上的 —— 这几个数就是"还能不能再加事件条数或字段"的判断依据,
+// 也是本仓库反复用到的那类实测数据。取不到的任务直接跳过(比如蓝牙没开时没有
+// nimble_host 任务)。
+static void print_stack_headroom(void)
+{
+    static const struct {
+        const char *task;
+        const char *label;
+    } TASKS[] = {
+        { "console_repl", "控制台" },
+        { "httpd",        "网页" },
+        { "taskLVGL",     "界面" },
+        { "nimble_host",  "蓝牙" },
+    };
+
+    char line[OUT_MAX];
+    int used = snprintf(line, sizeof(line), "栈余");
+    for (size_t i = 0; i < ARRAY_SIZE(TASKS); i++) {
+        TaskHandle_t handle = xTaskGetHandle(TASKS[i].task);
+        if (!handle || used >= (int)sizeof(line)) continue;
+        const size_t free_bytes = (size_t)uxTaskGetStackHighWaterMark(handle) *
+                                  sizeof(StackType_t);
+        used += snprintf(line + used, sizeof(line) - (size_t)used, " %s %u",
+                         TASKS[i].label, (unsigned)free_bytes);
+    }
+    love_console_out("%s\n", line);
+}
+
+// 两组显示序。设备屏幕上看不出"为什么是这个顺序",改完分类或网页上的顺序后
+// 敲 status 就能核对分组与组内排序 —— 列表分页、光标与单页翻卡都建在这两个顺序上,
 // 顺序错了整屏都是错的。
 static void print_event_order(void)
 {
-    love_config_t cfg;
-    love_store_load_config(&cfg);
-    if (cfg.event_count == 0) return;
+    // 一份 love_config_t 有 1454 字节,而控制台任务只有 4KB 栈(esp_console 自己还压着
+    // 一层),放栈上实测只剩三百多字节余量。这份数据只是看一眼就丢,直接走堆。
+    love_config_t *cfg = malloc(sizeof(*cfg));
+    if (!cfg) return;
+    love_store_load_config(cfg);
+    if (cfg->event_count == 0) {
+        free(cfg);
+        return;
+    }
 
     love_time_state_t state;
     love_time_get(&state);
@@ -215,20 +251,25 @@ static void print_event_order(void)
     if (holds) today = love_date_from_epoch(state.epoch_seconds, LOVE_TZ_OFFSET_SECONDS);
 
     uint8_t order[LOVE_EVENT_MAX];
-    const size_t count = love_event_order_build(cfg.events, cfg.event_count, today, holds,
-                                                order, sizeof(order));
-    if (count == 0) return;
-
-    love_console_out("模式  %s\n", cfg.display_mode == LOVE_DISPLAY_LIST ? "列表" : "单页");
-
     char line[OUT_MAX];
-    int used = snprintf(line, sizeof(line), "列表序");
-    for (size_t i = 0; i < count && used > 0 && used < (int)sizeof(line); i++) {
-        const love_event_t *event = &cfg.events[order[i]];
-        used += snprintf(line + used, sizeof(line) - (size_t)used, " %s[%s]",
-                         event->name, event->category[0] ? event->category : "未分类");
+
+    const uint8_t filters[2] = { LOVE_EVENT_VIEW_LIST, LOVE_EVENT_VIEW_PAGE };
+    const char *labels[2] = { "列表序", "单页序" };
+    for (int f = 0; f < 2; f++) {
+        const size_t count = love_event_order_build(cfg->events, cfg->event_count,
+                                                    filters[f], today, holds,
+                                                    order, sizeof(order));
+        if (count == 0) continue;
+
+        int used = snprintf(line, sizeof(line), "%s", labels[f]);
+        for (size_t i = 0; i < count && used > 0 && used < (int)sizeof(line); i++) {
+            const love_event_t *event = &cfg->events[order[i]];
+            used += snprintf(line + used, sizeof(line) - (size_t)used, " %s[%s]",
+                             event->name, event->category[0] ? event->category : "未分类");
+        }
+        love_console_out("%s\n", line);
     }
-    love_console_out("%s\n", line);
+    free(cfg);
 }
 
 static int cmd_status(void *ctx, int argc, char **argv)
@@ -260,10 +301,58 @@ static int cmd_status(void *ctx, int argc, char **argv)
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
-    const size_t headroom = love_ble_host_stack_headroom();
-    if (headroom > 0) love_console_out("蓝牙栈余 %u 字节\n", (unsigned)headroom);
-
+    print_stack_headroom();
     print_event_order();
+    return 0;
+}
+
+// 调试用:把一次按键注入应用,等价于真的按一下。
+// 存在的理由:截图协议只能看到"当前那一屏",没有这个入口就走不到别的屏去核对 ——
+// 列表、卡片、设置页的排版都验不了。参数上/下/确定/长按(长按=确定键长按)。
+static int cmd_key(void *ctx, int argc, char **argv)
+{
+    (void)ctx;
+
+    bsp_btn_t btn;
+    bsp_btn_ev_t ev = BSP_BTN_CLICK;
+    if (argc < 2) {
+        love_console_out("用法: key up|down|ok|long\n");
+        return 1;
+    }
+    if (strcmp(argv[1], "up") == 0) {
+        btn = BSP_BTN_UP;
+    } else if (strcmp(argv[1], "down") == 0) {
+        btn = BSP_BTN_DOWN;
+    } else if (strcmp(argv[1], "ok") == 0) {
+        btn = BSP_BTN_OK;
+    } else if (strcmp(argv[1], "long") == 0) {
+        btn = BSP_BTN_OK;
+        ev = BSP_BTN_LONG;
+    } else {
+        love_console_out("用法: key up|down|ok|long\n");
+        return 1;
+    }
+
+    love_app_key(btn, ev);
+    return 0;
+}
+
+// 截屏的图是从 USB 串口出去的,蓝牙链路拿不到(150KB 也不适合走通知)。
+static int cmd_shot(void *ctx, int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    if (src_of(ctx) != LOVE_CONSOLE_SRC_USB) {
+        love_console_out("截图只能从 USB 串口取。\n");
+        return 1;
+    }
+    // 成功时**什么都不打印**:二进制的图紧跟在这条命令之后,主机按声明字节数精确读取,
+    // 多一行文字虽然落在字节数之外,但没必要。失败的原因由 love_shot 记进日志。
+    if (!love_shot_send()) {
+        love_console_out("截图未完成,详情见串口日志。\n");
+        return 1;
+    }
     return 0;
 }
 
@@ -279,7 +368,12 @@ static const love_command_t COMMANDS[] = {
     { "wifi",   "配置 Wi-Fi:wifi / wifi <名称> <密码> / wifi open <名称> / wifi clear", cmd_wifi },
     { "ble",    "蓝牙串口:ble(看状态)/ ble on / ble off", cmd_ble },
     { "time",   "对时:time 看当前时间,time <Unix 秒> 写入", cmd_time },
-    { "status", "时间、网络、蓝牙与内存状态", cmd_status },
+    { "status", "时间、网络、蓝牙、内存与事件列表序", cmd_status },
+    { "shot",   "截图:把当前屏幕以 RGB565 经 USB 串口发出(见 tools/screenshot.py)", cmd_shot },
+    // 发布流程按 docs/reference/y2lin/serial-screenshot-protocol.md 发的是这个字面量,
+    // 所以它得是一条可用的命令名,而不是只写在文档里的约定。
+    { "FAP_SCREENSHOT_V1", "同 shot", cmd_shot },
+    { "key",    "调试:注入一次按键 key up|down|ok|long(配合截图核对各屏)", cmd_key },
     { "help",   "列出所有命令", cmd_help },
 };
 

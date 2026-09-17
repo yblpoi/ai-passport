@@ -8,11 +8,18 @@
 // 因此它恒排最后,不需要在比较里为它单开一个分支。
 #define GROUP_LAST 0xFF
 
-// 组键 = 同分类中第一条在持久数组里的下标;空分类固定为 GROUP_LAST。
-static uint8_t group_key_of(const love_event_t *events, size_t index)
+// 过不过滤。
+static bool passes(const love_event_t *event, uint8_t view_filter)
+{
+    return view_filter == LOVE_EVENT_VIEW_ANY || event->view_mode == view_filter;
+}
+
+// 组键 = 同分类中第一条(且同样通过筛选)在持久数组里的下标;空分类固定为 GROUP_LAST。
+static uint8_t group_key_of(const love_event_t *events, size_t index, uint8_t view_filter)
 {
     if (events[index].category[0] == '\0') return GROUP_LAST;
     for (size_t i = 0; i < index; i++) {
+        if (!passes(&events[i], view_filter)) continue;
         if (strcmp(events[i].category, events[index].category) == 0) {
             return (uint8_t)i;
         }
@@ -33,7 +40,7 @@ static int32_t days_key(const love_event_t *event, love_date_t today, bool holds
 }
 
 size_t love_event_order_build(const love_event_t *events, size_t count,
-                              love_date_t today, bool holds,
+                              uint8_t view_filter, love_date_t today, bool holds,
                               uint8_t *order, size_t order_size)
 {
     if (!events || !order || order_size == 0) return 0;
@@ -43,29 +50,37 @@ size_t love_event_order_build(const love_event_t *events, size_t count,
     if (count == 0) return 0;
 
     // 键先算好:插入排序会反复比较同一对元素,而 group_key_of 里是 strcmp。
-    uint8_t group[LOVE_EVENT_MAX];
-    int32_t days[LOVE_EVENT_MAX];
-    for (size_t i = 0; i < count; i++) {
-        group[i] = group_key_of(events, i);
-        days[i] = days_key(&events[i], today, holds);
-        order[i] = (uint8_t)i;
-    }
+    struct item {
+        uint8_t raw;
+        uint8_t group;
+        int32_t days;
+    } items[LOVE_EVENT_MAX];
 
-    // 稳定插入排序(元素最多 8 个)。比较时"先组后天数",相等则不动 —— 稳定。
-    for (size_t i = 1; i < count; i++) {
-        const uint8_t current = order[i];
+    size_t n = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!passes(&events[i], view_filter)) continue;
+        items[n].raw = (uint8_t)i;
+        items[n].group = group_key_of(events, i, view_filter);
+        items[n].days = days_key(&events[i], today, holds);
+        n++;
+    }
+    if (n == 0) return 0;
+
+    // 稳定插入排序(元素最多 LOVE_EVENT_MAX 个)。比较时"先组后天数",相等则不动。
+    for (size_t i = 1; i < n; i++) {
+        const struct item current = items[i];
         size_t j = i;
         while (j > 0) {
-            const uint8_t previous = order[j - 1];
-            const bool in_order = (group[previous] < group[current]) ||
-                                  (group[previous] == group[current] &&
-                                   days[previous] <= days[current]);
+            const bool in_order = (items[j - 1].group < current.group) ||
+                                  (items[j - 1].group == current.group &&
+                                   items[j - 1].days <= current.days);
             if (in_order) break;
-            order[j] = previous;
+            items[j] = items[j - 1];
             j--;
         }
-        order[j] = current;
+        items[j] = current;
     }
 
-    return count;
+    for (size_t i = 0; i < n; i++) order[i] = items[i].raw;
+    return n;
 }

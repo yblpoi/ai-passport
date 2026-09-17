@@ -35,5 +35,3 @@ int love_lunar_leap_month(int lunar_year);
 void love_lunar_format(int lunar_month, int lunar_day, char *buf, size_t size);
 
 // 农历月日的按键编辑:field 0 = 月(1..12 环绕),field 1 = 日(0..30 环绕,0 表示月末)。
-// 与公历的 love_date_step 分开,因为农历月长不是公历的 28/30/31。
-void love_lunar_step(int *lunar_month, int *lunar_day, int field, int delta);

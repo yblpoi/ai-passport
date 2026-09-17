@@ -45,6 +45,14 @@ static love_event_t once(const char *category, int year, int month, int day)
 static void expect_order(const uint8_t *order, size_t count, const uint8_t *expected)
 {
     for (size_t i = 0; i < count; i++) {
+        if (order[i] != expected[i]) {
+            // 断言本身只报行号,顺序类失败看不出差在哪,先把两组都打出来。
+            printf("显示序不符: 实际");
+            for (size_t k = 0; k < count; k++) printf(" %u", order[k]);
+            printf(" | 期望");
+            for (size_t k = 0; k < count; k++) printf(" %u", expected[k]);
+            printf("\n");
+        }
         assert(order[i] == expected[i]);
     }
 }
@@ -54,10 +62,10 @@ static void test_degenerate_inputs(void)
     love_event_t events[2] = { yearly("", 1, 1), yearly("", 2, 2) };
     uint8_t order[LOVE_EVENT_MAX];
 
-    assert(love_event_order_build(NULL, 2, today(), true, order, sizeof(order)) == 0);
-    assert(love_event_order_build(events, 2, today(), true, NULL, sizeof(order)) == 0);
-    assert(love_event_order_build(events, 2, today(), true, order, 0) == 0);
-    assert(love_event_order_build(events, 0, today(), true, order, sizeof(order)) == 0);
+    assert(love_event_order_build(NULL, 2, LOVE_EVENT_VIEW_ANY, today(), true, order, sizeof(order)) == 0);
+    assert(love_event_order_build(events, 2, LOVE_EVENT_VIEW_ANY, today(), true, NULL, sizeof(order)) == 0);
+    assert(love_event_order_build(events, 2, LOVE_EVENT_VIEW_ANY, today(), true, order, 0) == 0);
+    assert(love_event_order_build(events, 0, LOVE_EVENT_VIEW_ANY, today(), true, order, sizeof(order)) == 0);
 }
 
 // 没有分类时全部属于同一组,于是整个列表按"距今远近"升序。
@@ -71,7 +79,7 @@ static void test_no_categories_sorts_by_distance(void)
     };
     uint8_t order[LOVE_EVENT_MAX];
 
-    const size_t count = love_event_order_build(events, 3, today(), true,
+    const size_t count = love_event_order_build(events, 3, LOVE_EVENT_VIEW_ANY, today(), true,
                                                 order, sizeof(order));
     assert(count == 3);
     const uint8_t expected[] = { 1, 0, 2 };
@@ -88,7 +96,7 @@ static void test_past_events_use_absolute_distance(void)
     };
     uint8_t order[LOVE_EVENT_MAX];
 
-    const size_t count = love_event_order_build(events, 3, today(), true,
+    const size_t count = love_event_order_build(events, 3, LOVE_EVENT_VIEW_ANY, today(), true,
                                                 order, sizeof(order));
     const uint8_t expected[] = { 2, 1, 0 };
     expect_order(order, count, expected);
@@ -106,7 +114,7 @@ static void test_categories_group_in_first_appearance_order(void)
     };
     uint8_t order[LOVE_EVENT_MAX];
 
-    const size_t count = love_event_order_build(events, 4, today(), true,
+    const size_t count = love_event_order_build(events, 4, LOVE_EVENT_VIEW_ANY, today(), true,
                                                 order, sizeof(order));
     const uint8_t expected[] = { 0, 3, 2, 1 };
     expect_order(order, count, expected);
@@ -121,7 +129,7 @@ static void test_grouping_is_exact_match(void)
     };
     uint8_t order[LOVE_EVENT_MAX];
 
-    const size_t count = love_event_order_build(events, 2, today(), true,
+    const size_t count = love_event_order_build(events, 2, LOVE_EVENT_VIEW_ANY, today(), true,
                                                 order, sizeof(order));
     // 两个不同组,组序按首次出现,组内只有一条 —— 顺序仍是 0,1,
     // 但两个事件分属两组,所以"生日 "那条的 1 天优势不会把它拉到前面。
@@ -143,7 +151,7 @@ static void test_unresolved_lunar_goes_last(void)
 
     assert(!love_event_countdown(&events[0], far).resolved);
 
-    const size_t count = love_event_order_build(events, 2, far, true,
+    const size_t count = love_event_order_build(events, 2, LOVE_EVENT_VIEW_ANY, far, true,
                                                 order, sizeof(order));
     const uint8_t expected[] = { 1, 0 };
     expect_order(order, count, expected);
@@ -161,7 +169,7 @@ static void test_without_time_keeps_persistent_order(void)
     };
     uint8_t order[LOVE_EVENT_MAX];
 
-    const size_t count = love_event_order_build(events, 4, today(), false,
+    const size_t count = love_event_order_build(events, 4, LOVE_EVENT_VIEW_ANY, today(), false,
                                                 order, sizeof(order));
     // 组序仍是首次出现(生日 -> 节日 -> 未分类),组内不动:生日那组是 0,2。
     const uint8_t expected[] = { 0, 2, 3, 1 };
@@ -178,7 +186,7 @@ static void test_equal_keys_keep_original_order(void)
     };
     uint8_t order[LOVE_EVENT_MAX];
 
-    const size_t count = love_event_order_build(events, 3, today(), true,
+    const size_t count = love_event_order_build(events, 3, LOVE_EVENT_VIEW_ANY, today(), true,
                                                 order, sizeof(order));
     const uint8_t expected[] = { 0, 1, 2 };
     expect_order(order, count, expected);
@@ -186,16 +194,72 @@ static void test_equal_keys_keep_original_order(void)
 
 static void test_truncates_to_buffer_and_max(void)
 {
-    // 9 条:超过 LOVE_EVENT_MAX(8),应当被截到 8。
-    love_event_t events[9];
-    for (int i = 0; i < 9; i++) events[i] = yearly("", 1 + i, 1);
+    // 比上限还多一条:多出来的那条应当被丢掉。
+    love_event_t events[LOVE_EVENT_MAX + 1];
+    for (int i = 0; i <= LOVE_EVENT_MAX; i++) events[i] = yearly("", 1 + (i % 12), 1);
 
     uint8_t order[LOVE_EVENT_MAX];
-    assert(love_event_order_build(events, 9, today(), true, order, sizeof(order)) == LOVE_EVENT_MAX);
+    assert(love_event_order_build(events, LOVE_EVENT_MAX + 1, LOVE_EVENT_VIEW_ANY, today(),
+                                  true, order, sizeof(order)) == LOVE_EVENT_MAX);
 
     // 缓冲比事件少时,按缓冲大小截断。
     uint8_t small[3];
-    assert(love_event_order_build(events, 9, today(), true, small, sizeof(small)) == 3);
+    assert(love_event_order_build(events, LOVE_EVENT_MAX + 1, LOVE_EVENT_VIEW_ANY, today(),
+                                  true, small, sizeof(small)) == 3);
+}
+
+// v4 起每个事件自己带展示方式:列表屏与单页卡各取一组,分别排序。
+static void test_view_filter_splits_the_two_groups(void)
+{
+    love_event_t events[] = {
+        yearly("", 9, 20),    // 0 列表,3 天后
+        yearly("", 9, 18),    // 1 单页,1 天后
+        yearly("", 12, 25),   // 2 列表,99 天后
+        yearly("", 9, 25),    // 3 单页,8 天后
+    };
+    events[0].view_mode = LOVE_EVENT_VIEW_LIST;
+    events[1].view_mode = LOVE_EVENT_VIEW_PAGE;
+    events[2].view_mode = LOVE_EVENT_VIEW_LIST;
+    events[3].view_mode = LOVE_EVENT_VIEW_PAGE;
+
+    uint8_t order[LOVE_EVENT_MAX];
+
+    size_t count = love_event_order_build(events, 4, LOVE_EVENT_VIEW_LIST, today(), true,
+                                          order, sizeof(order));
+    assert(count == 2);
+    const uint8_t expect_list[] = { 0, 2 };
+    expect_order(order, count, expect_list);
+
+    count = love_event_order_build(events, 4, LOVE_EVENT_VIEW_PAGE, today(), true,
+                                   order, sizeof(order));
+    assert(count == 2);
+    const uint8_t expect_page[] = { 1, 3 };   // 1 天后在前,8 天后在后
+    expect_order(order, count, expect_page);
+
+    // 某一组可能是空的(用户把事件全设成一种),这不算错。
+    assert(love_event_order_build(events, 2, LOVE_EVENT_VIEW_PAGE, today(), true,
+                                  order, sizeof(order)) == 1);
+}
+
+// 组序只看本组:被筛掉的事件即便带着同名分类、且排在更前面,也不该影响组序。
+static void test_group_key_ignores_filtered_out_events(void)
+{
+    love_event_t events[] = {
+        yearly("生日", 1, 1),   // 单页 —— 被筛掉
+        yearly("生日", 2, 2),   // 列表
+        yearly("节日", 3, 3),   // 列表
+    };
+    events[0].view_mode = LOVE_EVENT_VIEW_PAGE;
+    events[1].view_mode = LOVE_EVENT_VIEW_LIST;
+    events[2].view_mode = LOVE_EVENT_VIEW_LIST;
+
+    uint8_t order[LOVE_EVENT_MAX];
+    const size_t count = love_event_order_build(events, 3, LOVE_EVENT_VIEW_LIST,
+                                                today(), true, order, sizeof(order));
+    // 列表组里"生日"第一次出现是下标 1、"节日"是下标 2,组序仍是 生日 在前。
+    assert(count == 2);
+    const uint8_t expected[] = { 1, 2 };
+    expect_order(order, count, expected);
 }
 
 int main(void)
@@ -209,6 +273,8 @@ int main(void)
     test_without_time_keeps_persistent_order();
     test_equal_keys_keep_original_order();
     test_truncates_to_buffer_and_max();
+    test_view_filter_splits_the_two_groups();
+    test_group_key_ignores_filtered_out_events();
 
     printf("test_love_event_order: PASS\n");
     return 0;

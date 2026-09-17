@@ -39,6 +39,3 @@ uint32_t love_ble_idle_seconds(void);
 // "从 BLE 链路敲 ble off"都会走它。注册方必须自己保证线程安全。
 void love_ble_set_shutdown_cb(void (*fn)(void));
 void love_ble_request_stop(void);
-
-// NimBLE host 任务的剩余栈(字节);没在跑时返回 0。用于确认 host 栈没有配得太小。
-size_t love_ble_host_stack_headroom(void);

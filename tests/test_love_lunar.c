@@ -162,33 +162,6 @@ static void test_format(void)
     assert(strcmp(buf, "农历") == 0);
 }
 
-static void test_step(void)
-{
-    int month = 8;
-    int day = 15;
-
-    love_lunar_step(&month, &day, 0, 1);       // 月 +1
-    assert(month == 9 && day == 15);
-    love_lunar_step(&month, &day, 0, -1);
-    assert(month == 8);
-
-    love_lunar_step(&month, &day, 0, 5);       // 月按 1..12 环绕
-    assert(month == 1);
-    love_lunar_step(&month, &day, 0, -1);
-    assert(month == 12);
-
-    // 日按 0..30 环绕,0 表示月末(除夕能直接在设备上调出来)
-    month = 12;
-    day = 30;
-    love_lunar_step(&month, &day, 1, 1);
-    assert(month == 12 && day == 0);
-    love_lunar_step(&month, &day, 1, -1);
-    assert(day == 30);
-    day = 1;
-    love_lunar_step(&month, &day, 1, -1);
-    assert(day == 0);
-}
-
 static void test_event_countdown_lunar(void)
 {
     love_event_t event = { .name = "春节", .icon = 0, .kind = LOVE_EVENT_LUNAR,
@@ -212,7 +185,6 @@ int main(void)
     test_out_of_range();
     test_month_days_sum();
     test_format();
-    test_step();
     test_event_countdown_lunar();
     return 0;
 }

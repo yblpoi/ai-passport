@@ -128,32 +128,6 @@ static void test_event_countdown(void)
     assert(love_event_countdown(null_event, today).days == 0);
 }
 
-static void test_date_step(void)
-{
-    // 月份 1..12 循环,不改变年份。
-    love_date_t d = love_date_step(date(2026, 12, 15), LOVE_FIELD_MONTH, 1);
-    assert(d.year == 2026 && d.month == 1 && d.day == 15);
-    d = love_date_step(date(2026, 1, 15), LOVE_FIELD_MONTH, -1);
-    assert(d.year == 2026 && d.month == 12);
-
-    // 日按当月天数循环。
-    d = love_date_step(date(2026, 1, 31), LOVE_FIELD_DAY, 1);
-    assert(d.month == 1 && d.day == 1);
-    d = love_date_step(date(2026, 1, 1), LOVE_FIELD_DAY, -1);
-    assert(d.month == 1 && d.day == 31);
-
-    // 切到 2 月时把 31 日夹回当月最后一天。
-    d = love_date_step(date(2026, 1, 31), LOVE_FIELD_MONTH, 1);
-    assert(d.month == 2 && d.day == 28);
-    d = love_date_step(date(2028, 1, 31), LOVE_FIELD_MONTH, 1);
-    assert(d.month == 2 && d.day == 29);
-
-    // 年份上下限。
-    assert(love_date_step(date(2099, 5, 5), LOVE_FIELD_YEAR, 5).year == 2099);
-    assert(love_date_step(date(1970, 5, 5), LOVE_FIELD_YEAR, -5).year == 1970);
-    assert(love_date_step(date(2096, 2, 29), LOVE_FIELD_YEAR, 1).day == 28);
-}
-
 static void test_format_and_epoch(void)
 {
     char buf[16];
@@ -218,7 +192,6 @@ int main(void)
     test_next_occurrence_matches_screenshots();
     test_next_occurrence_leap_fallback();
     test_event_countdown();
-    test_date_step();
     test_format_and_epoch();
     test_parse();
     return 0;

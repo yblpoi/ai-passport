@@ -169,23 +169,3 @@ void love_lunar_format(int lunar_month, int lunar_day, char *buf, size_t size)
     snprintf(buf, size, "%s%s", MONTH_NAMES[lunar_month], day);
 }
 
-// 农历日的可编辑范围:0(月末)再加 1..30，共 31 个取值。农历月最长 30 天。
-#define LUNAR_DAY_STEPS 31
-
-void love_lunar_step(int *lunar_month, int *lunar_day, int field, int delta)
-{
-    if (!lunar_month || !lunar_day) return;
-
-    if (field == 0) {
-        int month = *lunar_month + delta;
-        while (month < 1) month += 12;
-        while (month > 12) month -= 12;
-        *lunar_month = month;
-    } else {
-        // 0..30 环绕:0 是"月末",1..30 是具体日子。这样设备上也能直接调出除夕。
-        int day = *lunar_day + delta;
-        while (day < 0) day += LUNAR_DAY_STEPS;
-        while (day >= LUNAR_DAY_STEPS) day -= LUNAR_DAY_STEPS;
-        *lunar_day = day;
-    }
-}

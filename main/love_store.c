@@ -1,6 +1,8 @@
 // main/love_store.c —— NVS 持久化实现。
 #include "love_store.h"
 
+#include <stdlib.h>
+
 #include "love_pixel_art.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -88,12 +90,13 @@ void love_config_defaults(love_config_t *cfg)
         event->date.year = cfg->start.year;
         event->date.month = (int8_t)DEFAULTS[i].month;
         event->date.day = (int8_t)DEFAULTS[i].day;
+        // 出厂默认进列表:一屏就能看到接下来几个日子,比一个事件一屏更适合新机。
+        // (升级上来的老设备仍然保持原来的浏览方式,见 love_config.c 的迁移。)
+        event->view_mode = LOVE_EVENT_VIEW_LIST;
     }
     cfg->event_count = (uint8_t)count;
     cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;
-    // 出厂行为:保持原来的单页浏览,蓝牙关掉(用户可分别改)。
-    cfg->display_mode = LOVE_DISPLAY_PAGE;
-    cfg->ble_enabled = 0;   // 出厂默认档位,任意键唤醒
+    cfg->ble_enabled = 0;   // 出厂默认关
 }
 
 esp_err_t love_store_init(void)
@@ -127,14 +130,21 @@ void love_store_load_config(love_config_t *cfg)
     if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return;
 
     // 先探长度再读:老记录(v2)比现在短,按固定长度读会对不上,而长度又决定怎么解释字节。
-    love_config_record_t record;
+    // **中转缓冲走堆**:一份完整记录 v4 是 1460 字节,放栈上会把调用方的任务顶穿 ——
+    // 串口控制台任务(4KB 栈)实测就是这样栈溢出的。一次读一次释放,不常驻。
     size_t size = 0;
     esp_err_t err = nvs_get_blob(handle, KEY_CONFIG, NULL, &size);
-    if (err == ESP_OK && size <= sizeof(record)) {
-        err = nvs_get_blob(handle, KEY_CONFIG, &record, &size);
-        if (err == ESP_OK && !love_config_from_record(&record, size, cfg)) {
-            ESP_LOGW(TAG, "配置记录版本或长度不符(%u 字节),回落到默认值", (unsigned)size);
-            love_config_defaults(cfg);
+    if (err == ESP_OK && size > 0) {
+        void *blob = malloc(size);
+        if (blob) {
+            err = nvs_get_blob(handle, KEY_CONFIG, blob, &size);
+            if (err == ESP_OK && !love_config_from_record(blob, size, cfg)) {
+                ESP_LOGW(TAG, "配置记录版本或长度不符(%u 字节),回落到默认值", (unsigned)size);
+                love_config_defaults(cfg);
+            }
+            free(blob);
+        } else {
+            ESP_LOGW(TAG, "没有内存读配置记录(%u 字节),用默认值", (unsigned)size);
         }
     }
     nvs_close(handle);
@@ -147,17 +157,22 @@ esp_err_t love_store_save_config(const love_config_t *cfg)
     if (!cfg) return ESP_ERR_INVALID_ARG;
     if (!s_ready) return ESP_ERR_INVALID_STATE;
 
-    love_config_record_t record = { .version = LOVE_CONFIG_VERSION };
-    record.config = *cfg;
-    love_config_sanitize(&record.config);
+    // 同样是 1460 字节的一整份记录,同样不能放在调用方的栈上(保存路径里有按键任务
+    // 与网页任务)。nvs_set_blob 会立刻把数据拷进 NVS,写完就能释放。
+    love_config_record_t *record = malloc(sizeof(*record));
+    if (!record) return ESP_ERR_NO_MEM;
+    record->version = LOVE_CONFIG_VERSION;
+    record->config = *cfg;
+    love_config_sanitize(&record->config);
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) return err;
-
-    err = nvs_set_blob(handle, KEY_CONFIG, &record, sizeof(record));
-    if (err == ESP_OK) err = nvs_commit(handle);
-    nvs_close(handle);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(handle, KEY_CONFIG, record, sizeof(*record));
+        if (err == ESP_OK) err = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    free(record);
     if (err != ESP_OK) ESP_LOGE(TAG, "保存配置失败: %s", esp_err_to_name(err));
     return err;
 }

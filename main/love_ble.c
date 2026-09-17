@@ -140,14 +140,6 @@ void love_ble_request_stop(void)
     s_stop_requested = true;
 }
 
-size_t love_ble_host_stack_headroom(void)
-{
-    // 任务名由 IDF 的 NimBLE porting 层写死为 "nimble_host"。
-    TaskHandle_t host = xTaskGetHandle("nimble_host");
-    if (!host) return 0;
-    return (size_t)uxTaskGetStackHighWaterMark(host) * sizeof(StackType_t);
-}
-
 /* ---------- 设备 → 手机 ---------- */
 
 // 由 love_console 的输出出口调用。可能来自 BLE 控制台任务,也可能来自 USB REPL 任务

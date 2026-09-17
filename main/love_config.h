@@ -31,10 +31,6 @@ bool love_blank_off_valid(uint16_t seconds);
 // 每个槽位固定 LOVE_AVATAR_BYTES 字节,便于按槽位随机读写。
 #define LOVE_AVATAR_BYTES 800
 
-// 展示模式。列表 = 按分类分组、分页一屏显示多个事件;单页 = 每个事件独占一屏。
-#define LOVE_DISPLAY_LIST 0u
-#define LOVE_DISPLAY_PAGE 1u
-
 typedef struct {
     char name[LOVE_NAME_MAX];
     uint8_t icon;
@@ -46,14 +42,11 @@ typedef struct {
     uint8_t event_count;                      // 有效事件数,<= LOVE_EVENT_MAX
     uint16_t blank_off_seconds;               // 自动熄屏秒数,0 = 常亮
     love_event_t events[LOVE_EVENT_MAX];      // 事件列表
-    // ---- v3 起追加 ----
-    // 加在尾部不是为了 memcpy 兼容(events 的元素在 v3 变过,前缀早就不同了),
-    // 只是让"对着 v2 结构逐字段读老记录"的迁移代码好写好读。
-    uint8_t display_mode;                     // LOVE_DISPLAY_*
+    // ---- 展示方式从 v4 起挪进了每个事件(love_event_t.view_mode),见 love_event_order.h ----
     uint8_t ble_enabled;                      // 0 = 关(出厂默认)
 } love_config_t;
 
-#define LOVE_CONFIG_VERSION 3u
+#define LOVE_CONFIG_VERSION 4u
 
 // 落盘记录:版本号 + 配置。版本号是首字段,任何版本都能先把它读出来再决定怎么解释其余字节。
 typedef struct {
@@ -88,15 +81,45 @@ typedef struct {
     love_config_v2_t config;
 } love_config_v2_record_t;
 
+// v3 的布局同样**冻结**。与 v2 的区别:每条事件多了分类名,配置尾部多了全局展示模式
+// 与蓝牙开关,事件条数上限是 8。这里一律写死字面量,不引用任何会变的常量。
+typedef struct {
+    char name[25];
+    uint8_t icon;
+} love_config_v3_person_t;
+
+typedef struct {
+    char name[25];
+    uint8_t icon;
+    uint8_t kind;
+    love_date_t date;
+    char category[25];
+} love_config_v3_event_t;
+
+typedef struct {
+    love_date_t start;
+    love_config_v3_person_t people[2];
+    uint8_t event_count;
+    uint16_t blank_off_seconds;
+    love_config_v3_event_t events[8];
+    uint8_t display_mode;    // v3 的全局展示模式:0 = 列表,1 = 单页
+    uint8_t ble_enabled;
+} love_config_v3_t;
+
+typedef struct {
+    uint32_t version;
+    love_config_v3_t config;
+} love_config_v3_record_t;
+
 // 复制字符串,并在截断时**不切断多字节字符**(退到最后一个完整字符的边界)。
 // 名字、分类名与后台传入的字符串都走这里。
 void love_utf8_copy(char *dst, size_t size, const char *src);
 
-// 字段收敛:日期、名字、图标序号、熄屏档位、展示模式、蓝牙开关、事件尾部残留。
+// 字段收敛:日期、名字、图标序号、熄屏档位、每条事件的展示方式、蓝牙开关、事件尾部残留。
 // 载入后与落盘前都要跑一遍。
 void love_config_sanitize(love_config_t *cfg);
 
-// 把一条落盘记录解释成 v3 配置(含 v2→v3 迁移)。长度与版本都不认识时返回 false,
-// 调用方回落到默认值。调用方应先把 out 铺成默认值:迁移只覆盖老记录里真有的字段,
-// 新字段(v3 才加的)保持默认。
+// 把一条落盘记录解释成当前版本(v4)配置,含 v2→v4、v3→v4 迁移。
+// 长度与版本都不认识时返回 false,调用方回落到默认值。
+// 调用方应先把 out 铺成默认值:迁移只覆盖老记录里真有的字段。
 bool love_config_from_record(const void *blob, size_t size, love_config_t *out);

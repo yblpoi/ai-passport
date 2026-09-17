@@ -49,9 +49,6 @@ void love_config_sanitize(love_config_t *cfg)
     if (!love_blank_off_valid(cfg->blank_off_seconds)) {
         cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;
     }
-    if (cfg->display_mode != LOVE_DISPLAY_LIST && cfg->display_mode != LOVE_DISPLAY_PAGE) {
-        cfg->display_mode = LOVE_DISPLAY_PAGE;
-    }
     if (cfg->ble_enabled > 1) cfg->ble_enabled = 0;
 
     if (cfg->event_count > LOVE_EVENT_MAX) cfg->event_count = LOVE_EVENT_MAX;
@@ -71,6 +68,11 @@ void love_config_sanitize(love_config_t *cfg)
         event->category[LOVE_CATEGORY_MAX - 1] = '\0';
         if (event->icon >= LOVE_ICON_TOTAL) event->icon = 0;
         if (event->kind > LOVE_EVENT_LUNAR) event->kind = LOVE_EVENT_YEARLY;
+        // 展示方式只认两个值;坏的按出厂默认(列表)。
+        if (event->view_mode != LOVE_EVENT_VIEW_LIST &&
+            event->view_mode != LOVE_EVENT_VIEW_PAGE) {
+            event->view_mode = LOVE_EVENT_VIEW_LIST;
+        }
         if (event->kind == LOVE_EVENT_LUNAR) {
             // 农历事件:month/day 是农历月日,day = 0 表示月末(除夕)。
             // 这里不能按公历校验(date_valid 会要求具体年月日),单独收敛。
@@ -84,8 +86,9 @@ void love_config_sanitize(love_config_t *cfg)
     }
 }
 
-// v2 记录 -> v3:老记录没有分类、没有展示模式与蓝牙开关。分类留空("无分类"),
-// 展示模式与蓝牙开关保持调用方铺好的默认值 —— 也就是升级后行为不变。
+// v2 记录 -> v4:老记录没有分类、没有展示方式与蓝牙开关。分类留空("无分类"),
+// 展示方式按"一个事件占一屏"的老行为填单页(升级后看到的屏幕不变),
+// 蓝牙开关保持调用方铺好的默认值。
 static void migrate_v2(const love_config_v2_t *old, love_config_t *out)
 {
     out->start = old->start;
@@ -108,6 +111,45 @@ static void migrate_v2(const love_config_v2_t *old, love_config_t *out)
         out->events[i].kind = old->events[i].kind;
         out->events[i].date = old->events[i].date;
         out->events[i].category[0] = '\0';
+        // v2 时代没有展示方式这个概念,设备就是"一个事件一屏"。
+        out->events[i].view_mode = LOVE_EVENT_VIEW_PAGE;
+    }
+}
+
+// v3 记录 -> v4:字段基本一一对应,只有两处不同:
+//   1. v3 是**全局**一个展示模式,v4 变成每条事件自己带 —— 把全局值摊到每条上,
+//      升级后屏幕上看到的东西不变;
+//   2. 事件上限从 8 提到 LOVE_EVENT_MAX,超出部分只能丢(现实中不会有人有)。
+static void migrate_v3(const love_config_v3_t *old, love_config_t *out)
+{
+    out->start = old->start;
+    out->blank_off_seconds = old->blank_off_seconds;
+    out->ble_enabled = (old->ble_enabled > 1) ? 0 : old->ble_enabled;
+
+    for (size_t i = 0; i < LOVE_PERSON_MAX; i++) {
+        love_utf8_copy(out->people[i].name, sizeof(out->people[i].name),
+                       old->people[i].name);
+        out->people[i].icon = old->people[i].icon;
+    }
+
+    uint8_t count = old->event_count;
+    if (count > 8) count = 8;                 // v3 的记录里最多就 8 条
+    if (count > LOVE_EVENT_MAX) count = LOVE_EVENT_MAX;
+    out->event_count = count;
+
+    // v3 的 display_mode 里 0 = 列表、1 = 单页(写死字面量:那个常量已经删了,
+    // 这里是历史格式的一部分,不能跟着新代码走)。
+    const uint8_t view = (old->display_mode == 0u) ? LOVE_EVENT_VIEW_LIST
+                                                    : LOVE_EVENT_VIEW_PAGE;
+    for (size_t i = 0; i < count; i++) {
+        love_utf8_copy(out->events[i].name, sizeof(out->events[i].name),
+                       old->events[i].name);
+        out->events[i].icon = old->events[i].icon;
+        out->events[i].kind = old->events[i].kind;
+        out->events[i].date = old->events[i].date;
+        love_utf8_copy(out->events[i].category, sizeof(out->events[i].category),
+                       old->events[i].category);
+        out->events[i].view_mode = view;
     }
 }
 
@@ -123,6 +165,13 @@ bool love_config_from_record(const void *blob, size_t size, love_config_t *out)
         love_config_record_t record;
         memcpy(&record, blob, sizeof(record));
         *out = record.config;
+        return true;
+    }
+
+    if (version == 3u && size == sizeof(love_config_v3_record_t)) {
+        love_config_v3_record_t record;
+        memcpy(&record, blob, sizeof(record));
+        migrate_v3(&record.config, out);
         return true;
     }
 

@@ -31,19 +31,20 @@ MOCK_STATE = {
     "config": {
         "start": "2000-01-01",
         "blankOff": 30,
-        "displayMode": 1,
         "bleEnabled": False,
         "people": [{"name": "咕咕", "icon": 0}, {"name": "嘎嘎", "icon": 1}],
+        # viewMode:v4 起每条事件自己挑展示方式 —— 0 = 进列表屏,1 = 自己占一屏。
+        # 这里刻意两种都放,本地预览就能同时看到列表/单页的差别。
         "events": [
-            {"name": "元旦", "icon": 12, "kind": 0, "date": "2026-01-01", "category": "节假日"},
-            {"name": "情人节", "icon": 6, "kind": 0, "date": "2026-02-14"},
-            {"name": "咕咕嘎嘎", "icon": 10, "kind": 0, "date": "2000-01-01"},
-            {"name": "国庆节", "icon": 7, "kind": 0, "date": "2026-10-01"},
-            {"name": "圣诞节", "icon": 15, "kind": 0, "date": "2026-12-25"},
+            {"name": "元旦", "icon": 12, "kind": 0, "date": "2026-01-01", "category": "节假日", "viewMode": 0},
+            {"name": "情人节", "icon": 6, "kind": 0, "date": "2026-02-14", "viewMode": 0},
+            {"name": "咕咕嘎嘎", "icon": 10, "kind": 0, "date": "2000-01-01", "viewMode": 1},
+            {"name": "国庆节", "icon": 7, "kind": 0, "date": "2026-10-01", "viewMode": 0},
+            {"name": "圣诞节", "icon": 15, "kind": 0, "date": "2026-12-25", "viewMode": 0},
             # 农历事件用独立的 lunarMonth / lunarDay，不塞公历日期字段
-            {"name": "春节", "icon": 11, "kind": 2, "lunarMonth": 1, "lunarDay": 1},
-            {"name": "中秋", "icon": 9, "kind": 2, "lunarMonth": 8, "lunarDay": 15},
-            {"name": "端午", "icon": 14, "kind": 2, "lunarMonth": 5, "lunarDay": 5},
+            {"name": "春节", "icon": 11, "kind": 2, "lunarMonth": 1, "lunarDay": 1, "viewMode": 0},
+            {"name": "中秋", "icon": 9, "kind": 2, "lunarMonth": 8, "lunarDay": 15, "viewMode": 0},
+            {"name": "端午", "icon": 14, "kind": 2, "lunarMonth": 5, "lunarDay": 5, "viewMode": 0},
         ],
     },
     "time": {

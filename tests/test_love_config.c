@@ -1,4 +1,4 @@
-// tests/test_love_config.c —— 配置结构与 v2→v3 迁移的 host 测试。
+// tests/test_love_config.c —— 配置结构与各版本迁移的 host 测试。
 //
 // 这是全仓最危险的一段逻辑:记录长度或版本判错,设备上用户的起始日、姓名、事件
 // 就会被静默清空。所以布局用 offsetof 逐字段钉住,迁移逐字段验。
@@ -20,21 +20,29 @@ _Static_assert(offsetof(love_config_v2_t, blank_off_seconds) == 58, "v2 配置�
 _Static_assert(offsetof(love_config_v2_t, events) == 60, "v2 配置字段偏移变了");
 _Static_assert(sizeof(love_config_v2_record_t) == 320, "v2 记录长度变了");
 
-// v3 的长度同样钉住:动它就必须同时升 LOVE_CONFIG_VERSION 并写迁移,否则老设备
-// 上的记录会被按新长度解释 —— 这正是"静默清空用户数据"的入口。
-_Static_assert(sizeof(love_config_t) == 526, "v3 配置结构变了,需要升版本并写迁移");
-_Static_assert(sizeof(love_config_record_t) == 532, "v3 记录长度变了,需要升版本并写迁移");
+// 冻结的 v3 布局(与 v2 同理):它们的记录必须永远是 532 字节,否则老设备上按 v3
+// 存下的起始日、姓名、事件会被按别的长度解释 —— 这正是"静默清空用户数据"的入口。
+_Static_assert(sizeof(love_config_v3_event_t) == 58, "v3 事件结构变了");
+_Static_assert(offsetof(love_config_v3_event_t, category) == 32, "v3 事件字段偏移变了");
+_Static_assert(sizeof(love_config_v3_t) == 526, "v3 配置结构变了");
+_Static_assert(sizeof(love_config_v3_record_t) == 532, "v3 记录长度变了");
+
+// v4(当前版本):事件上限 8 → 24,每条事件多一个 view_mode(展示方式从全局挪到每条)。
+// 动这些数字就必须同时升 LOVE_CONFIG_VERSION 并写迁移。
+_Static_assert(sizeof(love_event_t) == 58, "v4 事件结构变了,需要升版本并写迁移");
+_Static_assert(offsetof(love_event_t, view_mode) == 57, "v4 事件字段偏移变了");
+_Static_assert(sizeof(love_config_t) == 1454, "v4 配置结构变了,需要升版本并写迁移");
+_Static_assert(sizeof(love_config_record_t) == 1460, "v4 记录长度变了,需要升版本并写迁移");
 
 // 模拟调用方加载前铺好的默认值,用来验证"新字段不受迁移影响"。
 static void seed_defaults(love_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
-    cfg->display_mode = LOVE_DISPLAY_PAGE;
     cfg->ble_enabled = 0;
     cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;
 }
 
-static void test_migrate_v2_to_v3(void)
+static void test_migrate_v2_to_v4(void)
 {
     love_config_v2_record_t old;
     memset(&old, 0, sizeof(old));
@@ -78,39 +86,107 @@ static void test_migrate_v2_to_v3(void)
     assert(strcmp(now.events[2].name, "毕业") == 0);
     assert(now.events[2].kind == 1 && now.events[2].date.year == 2024);
 
-    // v3 才有的字段:v2 没有分类,空串;展示模式与蓝牙开关保持调用方铺的默认值,
-    // 也就是"升级后行为不变"。事件尾部残留必须被清掉。
+    // v3/v4 才有的字段:v2 没有分类(空串),也没有展示方式 —— 那时候设备就是
+    // "一个事件一屏",所以迁移成单页,升级后看到的东西不变。蓝牙开关保持调用方
+    // 铺的默认值。事件尾部残留必须被清掉。
     for (size_t i = 0; i < LOVE_EVENT_MAX; i++) {
         assert(now.events[i].category[0] == '\0');
     }
-    assert(now.display_mode == LOVE_DISPLAY_PAGE);
+    assert(now.events[0].view_mode == LOVE_EVENT_VIEW_PAGE);
+    assert(now.events[1].view_mode == LOVE_EVENT_VIEW_PAGE);
+    assert(now.events[2].view_mode == LOVE_EVENT_VIEW_PAGE);
     assert(now.ble_enabled == 0);
     assert(now.events[LOVE_EVENT_MAX - 1].name[0] == '\0');
 }
 
-static void test_v3_record_round_trip(void)
+// v3 → v4:字段基本一一对应,唯一要小心的是 v3 的**全局**展示模式要摊到每条事件上
+// (v4 起是每条自己带),否则升级后用户看到的屏会突然从列表变成单页。
+static void test_migrate_v3_to_v4(void)
 {
-    love_config_record_t record;
+    love_config_v3_record_t record;
     memset(&record, 0, sizeof(record));
-    record.version = LOVE_CONFIG_VERSION;
+    record.version = 3u;
     record.config.start = (love_date_t){ 2000, 1, 1 };
-    record.config.event_count = 1;
+    record.config.blank_off_seconds = 60;
+    record.config.event_count = 2;
     strcpy(record.config.people[0].name, "咕咕");
+    record.config.people[0].icon = 17;
     strcpy(record.config.events[0].name, "在一起");
     strcpy(record.config.events[0].category, "纪念日");
     record.config.events[0].icon = 6;
     record.config.events[0].kind = 0;
     record.config.events[0].date = (love_date_t){ 2000, 1, 1 };
-    record.config.display_mode = LOVE_DISPLAY_LIST;
+    strcpy(record.config.events[1].name, "春节");
+    record.config.events[1].kind = 2;
+    record.config.events[1].date = (love_date_t){ 0, 1, 1 };
+    record.config.display_mode = 0;    // 0 = 列表(v3 的取值)
     record.config.ble_enabled = 1;
 
     love_config_t now;
     seed_defaults(&now);
     assert(love_config_from_record(&record, sizeof(record), &now) == true);
-    assert(now.display_mode == LOVE_DISPLAY_LIST);
+
+    // 逐字段搬过来了
+    assert(now.start.year == 2000 && now.start.month == 1 && now.start.day == 1);
+    assert(now.blank_off_seconds == 60);
     assert(now.ble_enabled == 1);
+    assert(now.event_count == 2);
+    assert(strcmp(now.people[0].name, "咕咕") == 0 && now.people[0].icon == 17);
+    assert(strcmp(now.events[0].name, "在一起") == 0);
     assert(strcmp(now.events[0].category, "纪念日") == 0);
-    assert(now.event_count == 1);
+    assert(now.events[0].icon == 6 && now.events[0].kind == 0);
+    assert(now.events[1].kind == 2 && now.events[1].date.day == 1);
+
+    // 全局"列表"摊到了每一条上
+    assert(now.events[0].view_mode == LOVE_EVENT_VIEW_LIST);
+    assert(now.events[1].view_mode == LOVE_EVENT_VIEW_LIST);
+    // 尾部残留清掉
+    assert(now.events[2].name[0] == '\0');
+    assert(now.events[LOVE_EVENT_MAX - 1].name[0] == '\0');
+}
+
+// v3 里是单页(display_mode = 1)的老设备,升级后也应当是单页。
+static void test_migrate_v3_single_page_stays_single(void)
+{
+    love_config_v3_record_t record;
+    memset(&record, 0, sizeof(record));
+    record.version = 3u;
+    record.config.event_count = 1;
+    record.config.display_mode = 1;
+
+    love_config_t now;
+    seed_defaults(&now);
+    assert(love_config_from_record(&record, sizeof(record), &now) == true);
+    assert(now.events[0].view_mode == LOVE_EVENT_VIEW_PAGE);
+}
+
+// v4 自己:原样读回,包括每条事件的展示方式。
+static void test_v4_record_round_trip(void)
+{
+    love_config_record_t record;
+    memset(&record, 0, sizeof(record));
+    record.version = LOVE_CONFIG_VERSION;
+    record.config.start = (love_date_t){ 2000, 1, 1 };
+    record.config.event_count = 2;
+    record.config.blank_off_seconds = 180;
+    record.config.ble_enabled = 1;
+    strcpy(record.config.people[0].name, "咕咕");
+    strcpy(record.config.events[0].name, "在一起");
+    strcpy(record.config.events[0].category, "纪念日");
+    record.config.events[0].view_mode = LOVE_EVENT_VIEW_LIST;
+    strcpy(record.config.events[1].name, "除夕");
+    record.config.events[1].kind = LOVE_EVENT_LUNAR;
+    record.config.events[1].view_mode = LOVE_EVENT_VIEW_PAGE;
+
+    love_config_t now;
+    seed_defaults(&now);
+    assert(love_config_from_record(&record, sizeof(record), &now) == true);
+    assert(now.ble_enabled == 1);
+    assert(now.blank_off_seconds == 180);
+    assert(now.event_count == 2);
+    assert(now.events[0].view_mode == LOVE_EVENT_VIEW_LIST);
+    assert(now.events[1].view_mode == LOVE_EVENT_VIEW_PAGE);
+    assert(strcmp(now.events[1].name, "除夕") == 0);
 }
 
 static void test_unknown_records_rejected(void)
@@ -176,7 +252,6 @@ static void test_sanitize_clamps_everything(void)
     cfg.people[0].icon = 200;
     cfg.people[1].icon = LOVE_ICON_TOTAL;
     cfg.blank_off_seconds = 7;
-    cfg.display_mode = 42;
     cfg.ble_enabled = 9;
     cfg.event_count = 200;             // 超过上限
     strcpy(cfg.events[0].name, "生日");
@@ -193,11 +268,15 @@ static void test_sanitize_clamps_everything(void)
     assert(strcmp(cfg.people[1].name, "TA") == 0);
     assert(cfg.people[0].icon == 0 && cfg.people[1].icon == 0);
     assert(cfg.blank_off_seconds == LOVE_BLANK_OFF_DEFAULT);
-    assert(cfg.display_mode == LOVE_DISPLAY_PAGE);
     assert(cfg.ble_enabled == 0);
     assert(cfg.event_count == LOVE_EVENT_MAX);
     assert(cfg.events[0].icon == 0);
     assert(cfg.events[0].kind == LOVE_EVENT_YEARLY);
+    // 展示方式全零 = LOVE_EVENT_VIEW_LIST,是合法的出厂默认,不该被判成非法;
+    // 越界的值才要收敛回列表。
+    cfg.events[0].view_mode = 42;
+    love_config_sanitize(&cfg);
+    assert(cfg.events[0].view_mode == LOVE_EVENT_VIEW_LIST);
     assert(love_date_valid(cfg.events[0].date));
     // 尾部残留被清掉(第 8 条本来就叫"残留",event_count 被夹到 8 之后它成了有效项,
     // 所以这里验证的是"名字被保留、但分类字段被收敛为空")
@@ -225,8 +304,10 @@ static void test_sanitize_clamps_everything(void)
 
 int main(void)
 {
-    test_migrate_v2_to_v3();
-    test_v3_record_round_trip();
+    test_migrate_v2_to_v4();
+    test_migrate_v3_to_v4();
+    test_migrate_v3_single_page_stays_single();
+    test_v4_record_round_trip();
     test_unknown_records_rejected();
     test_utf8_copy_truncates_on_boundary();
     test_sanitize_clamps_everything();

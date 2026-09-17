@@ -328,10 +328,11 @@ function renderPreview(){
 // 单独成函数是因为它同时依赖"当前预览哪个屏"和"展示模式",两边都要能触发刷新。
 function updatePreviewHint(){
   const main = byId("pvMainView").style.display !== "none";
-  const lunarFirst = model.events[0] && model.events[0].kind === 2;
+  // 设备上事件卡不再能改日期,所以卡片提示只说怎么走;主屏提示看有没有"列表"事件。
+  const hasList = model.events.some((e) => (e.viewMode ?? 0) === 0);
   byId("pvHint").textContent = main
-    ? (model.displayMode === 0 ? "上/下 列表 · 长按确定 设置" : "上/下 切换 · 长按确定 设置")
-    : (lunarFirst ? "确定 改农历日期" : "确定 改日期");
+    ? (hasList ? "上/下 列表 · 长按确定 设置" : "上/下 切换 · 长按确定 设置")
+    : "上/下 翻卡 · 长按确定 设置";
 }
 
 // 切换预览视图时，页码与底部提示行也要跟真机一致。
@@ -411,8 +412,6 @@ function iconPicker(container, onPick, selected, onAvatarChanged){
 function renderAll(){
   byId("start").value = model.start;
   byId("blankOff").value = String(model.blankOff ?? 30);
-  // 展示模式:缺字段时按设备的出厂默认(单页)显示,别让选择器停在一个空值上。
-  byId("displayMode").value = String(model.displayMode ?? 1);
   byId("bleEnabled").value = model.bleEnabled ? "1" : "0";
   byId("nameA").value = model.people[0].name;
   byId("nameB").value = model.people[1].name;
@@ -505,7 +504,8 @@ function renderEvents(){
     // 标题上带上名字:收起之后仍要知道这是哪一条,不然只能靠逐条展开找。
     box.innerHTML = `
       <div class="head">
-        <span>事件 ${idx+1}${e.name ? " · " + esc(e.name) : ""}</span>
+        <span>事件 ${idx+1}${e.name ? " · " + esc(e.name) : ""}${
+          e.viewMode === 1 ? ' <span class="muted">单页</span>' : ""}</span>
         <span class="headbtns">
           <button type="button" class="ghost tile" data-move="${idx}" data-delta="-1"
                   title="上移"${idx === 0 ? " disabled" : ""}>↑</button>
@@ -520,6 +520,11 @@ function renderEvents(){
       <label>分类 <span class="muted">留空 = 不分类</span></label>
       <input type="text" maxlength="8" list="categoryOptions" data-category="${idx}"
              value="${esc(e.category)}" placeholder="例如 生日、节日、家人">
+      <label>展示</label>
+      <select data-view="${idx}">
+        <option value="0"${(e.viewMode ?? 0) === 0 ? " selected" : ""}>进列表（一屏 4 条，可按分类分组）</option>
+        <option value="1"${e.viewMode === 1 ? " selected" : ""}>单页（自己独占一屏）</option>
+      </select>
       <label>重复方式</label>
       <select data-kind="${idx}">
         <option value="0"${e.kind===0?" selected":""}>每年重复（生日 / 节日）</option>
@@ -577,6 +582,12 @@ function renderEvents(){
     model.events[Number(i.dataset.category)].category = i.value;
     // 只刷 datalist,不重建列表 —— 重建会让正在输入的这个框失去焦点。
     updateCategoryOptions();
+  });
+  host.querySelectorAll("[data-view]").forEach(i => i.onchange = () => {
+    const idx = Number(i.dataset.view);
+    model.events[idx].viewMode = Number(i.value);
+    // 只刷预览的提示行,不重建整张列表 —— 重建会把刚操作的这一条挤走。
+    renderPreview();
   });
   host.querySelectorAll("[data-date]").forEach(i => i.onchange = () => {
     model.events[Number(i.dataset.date)].date = i.value; renderPreview();
@@ -654,20 +665,20 @@ async function save(){
 
 byId("save").onclick = () => save().catch(e => toast("保存失败：" + e.message));
 byId("reload").onclick = () => load().then(()=>toast("已重新载入")).catch(e=>toast(e.message));
+// 与设备端 LOVE_EVENT_MAX 一致(24):设备记录一次要能塞进 NVS blob,也要让
+// 控制台/网页两个任务各自的 4KB、6KB 栈放得下一个 love_config_t。
+const EVENT_MAX = 24;
+
 byId("addEvent").onclick = () => {
-  if(model.events.length >= 8){ toast("最多 8 条事件"); return; }
+  if(model.events.length >= EVENT_MAX){ toast(`最多 ${EVENT_MAX} 条事件`); return; }
   const today = currentToday();
   const iso = today.y + "-" + String(today.m).padStart(2,"0") + "-" + String(today.d).padStart(2,"0");
   // category 显式给空串:让"新加的这条确实没有分类",而不是靠后端按同下标保留旧值。
-  model.events.push({name:"新的纪念日", icon:6, kind:0, date:iso, category:""});
+  model.events.push({name:"新的纪念日", icon:6, kind:0, date:iso, category:"", viewMode:0});
   renderEvents(); renderPreview();
 };
 byId("start").onchange = (e) => { model.start = e.target.value; renderPreview(); };
 byId("blankOff").onchange = (e) => { model.blankOff = Number(e.target.value); };
-byId("displayMode").onchange = (e) => {
-  model.displayMode = Number(e.target.value);
-  renderPreview();   // 主屏提示行会跟着模式变
-};
 byId("bleEnabled").onchange = (e) => { model.bleEnabled = e.target.value === "1"; };
 byId("nameA").oninput = (e) => { model.people[0].name = e.target.value; renderPreview(); };
 byId("nameB").oninput = (e) => { model.people[1].name = e.target.value; renderPreview(); };

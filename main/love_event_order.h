@@ -24,6 +24,13 @@
 // 算出显示序。order[i] 是 events[] 里的下标,返回实际写入的条数。
 // 条数超过 count / order_size / LOVE_EVENT_MAX 时按最小者截断。
 // holds 为 false(设备还没有可用时间)时不做组内排序。
+//
+// view_filter 用来分别取"列表事件"和"单页事件"两组:传 LOVE_EVENT_VIEW_LIST 或
+// LOVE_EVENT_VIEW_PAGE 只排那一组,传 LOVE_EVENT_VIEW_ANY 就不过滤。
+// 分组键也只看通过筛选的那些事件 —— 否则组序会被一条根本不出现在这一组里的事件
+// 决定。
+#define LOVE_EVENT_VIEW_ANY 0xFFu
+
 size_t love_event_order_build(const love_event_t *events, size_t count,
-                              love_date_t today, bool holds,
+                              uint8_t view_filter, love_date_t today, bool holds,
                               uint8_t *order, size_t order_size);

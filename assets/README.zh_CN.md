@@ -85,9 +85,14 @@
 
 - 源文件：`images/love_pixel_art_gen.py`（8×8 像素掩码 + 16 色调色板，无第三方依赖）。
 - 生成结果：
-  - `images/love_pixel_art.c` + `main/love_pixel_art.h`：16 个 40×40 ARGB8888
-    图标（掩码放大 5 倍，整数倍才不会有半像素）、48×48 RGB565 爱心底纹平铺砖，
-    以及 `love_pixel_palette[16]`。
+  - `images/love_pixel_art.c` + `main/love_pixel_art.h`：16 个 40×40 的 4bpp
+    索引（I4）图标（掩码放大 5 倍，整数倍才不会有半像素）、48×48 RGB565 爱心
+    底纹平铺砖，以及 `love_pixel_palette[16]`。
+  - 图标是 I4 而不是 ARGB8888：调色板 16 色内嵌在每个图标数据头部（`lv_color32_t`
+    内存顺序 B,G,R,A），其后是每字节 2 像素、高半字节在前的索引。这是
+    `lv_bin_decoder` 对 `LV_IMAGE_SRC_VARIABLE` + 索引格式的约定，所以不需要开
+    `LV_BIN_DECODER_RAM_LOAD`，绘制时按行按需转换。图标自带调色板的索引 0 固定为
+    透明（图标是镂空的），与下面那张不含透明项的头像调色板是两张表。
   - `images/web/`：同一份掩码导出的 PNG、`icons.json`/`assets.json` 数据 URI、
     调色板（`palette` 字段）与 `contact-sheet.png` 核对图，供后台网页使用。
 - 调色板顺序即自定义头像 4bpp 的索引顺序（`PALETTE_ORDER`），**改动等于让所有
@@ -100,8 +105,8 @@
   的 `target_sources` 编译；网页素材经 `tools/gen_admin_page.py` 内联进
   `main/love_admin_page.h`。
 - 许可：图标与底纹为本仓库原创的作品，采用本仓库许可证。
-- 代价：图标、底纹与调色板合计约 326 KB 源码 / 约 100 KB Flash；
-  ARGB8888 图标在绘制时按需转换，不整屏缓存。
+- 代价：图标、底纹与调色板合计约 111 KB 源码 / 约 18 KB Flash（图标 13.8 KB、
+  底纹 4.6 KB）；I4 图标在绘制时按行转换，不整屏缓存。
 
 ### 农历数据表（love_lunar_table）
 

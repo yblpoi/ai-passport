@@ -4,7 +4,8 @@
 同一份 8x8 像素掩码同时产出两路结果，保证设备界面与后台网页的视觉完全一致：
 
 1. `assets/images/love_pixel_art.c` + `main/love_pixel_art.h`
-   —— 40x40 ARGB8888 图标（掩码放大 5 倍，整数倍放缩才不会有半像素）与 48x48 爱心底纹。
+   —— 40x40 的 4bpp 索引图标（掩码放大 5 倍，整数倍放缩才不会有半像素；调色板
+   16 色内嵌在数据头部）与 48x48 爱心底纹。
 2. `assets/images/web/icon_<name>.png` + `assets/images/web/icons.json`
    —— 网页用的同款 PNG 与 base64 数据表。
 3. `assets/images/web/contact-sheet.png` —— 仅供人工核对的预览图。
@@ -308,6 +309,35 @@ def build_bg_tile() -> list[list[tuple[int, int, int]]]:
     return tile
 
 
+def build_icon_palette(arrays) -> list[tuple[int, int, int, int]]:
+    """图标的 I4 调色板：索引 0 固定为透明（图标外轮廓内部是镂空的），
+    其余按 PALETTE_ORDER 顺序排列图标真正用到的颜色。
+
+    注意与 love_pixel_palette 的区别：那张 16 色表是自定义头像的索引顺序，
+    没有透明项（网页上传的头像恒为不透明）。图标要透明，所以自带一张表——
+    lv_bin_decoder 对 LV_IMAGE_SRC_VARIABLE + 索引格式的约定就是
+    palette 位于 image->data 开头，因此每张图都能带自己的 16 色。"""
+    used = set()
+    for _name, rows in arrays:
+        for row in rows:
+            used.update(row)
+
+    transparent = (0, 0, 0, 0)
+    palette = [transparent]
+    for ch in PALETTE_ORDER:
+        r, g, b = PALETTE[ch]
+        if (r, g, b, 255) in used:
+            palette.append((r, g, b, 255))
+
+    opaque_used = used - {transparent}
+    assert len(opaque_used) + 1 <= 16, (
+        f"I4 只有 16 个槽位：图标用了 {len(opaque_used)} 种不透明色 + 透明，放不下")
+    assert len(palette) - 1 == len(opaque_used), (
+        "有图标颜色没登记在 PALETTE/PALETTE_ORDER 里，会在生成时被悄悄丢掉")
+
+    return palette + [(0, 0, 0, 0)] * (16 - len(palette))
+
+
 def main() -> None:
     icons: list[tuple[str, str]] = []
     arrays: list[tuple[str, list[list[tuple[int, int, int, int]]]]] = []
@@ -319,20 +349,38 @@ def main() -> None:
     c_lines = [
         "// assets/images/love_pixel_art.c —— 由 assets/images/love_pixel_art_gen.py 生成,请勿手改。",
         "// 同一份掩码也导出到 assets/images/web/ 供后台网页使用,两端视觉一致。",
+        "//",
+        "// 图标是 LV_COLOR_FORMAT_I4:数据开头是 16 个 lv_color32_t 调色板(内存顺序",
+        "// B,G,R,A),后面是每字节 2 像素、高半字节在前的索引。这是 lv_bin_decoder 对",
+        "// LV_IMAGE_SRC_VARIABLE + 索引格式的约定(见 decode_indexed:palette 取",
+        "// image->data 开头,索引数据从 image->data + palette_size*4 开始)。",
         '#include "love_pixel_art.h"',
         "",
     ]
+
+    icon_palette = build_icon_palette(arrays)
+    palette_index = {px: i for i, px in enumerate(icon_palette)}
+    row_bytes = ICON_PX // 2
+
     for name, rows in arrays:
-        c_lines.append(f"static const uint32_t icon_{name}_data[{ICON_PX * ICON_PX}] = {{")
+        packed = bytearray()
         for row in rows:
+            for x in range(0, ICON_PX, 2):
+                packed.append((palette_index[row[x]] << 4) | palette_index[row[x + 1]])
+
+        c_lines.append(
+            f"static const uint8_t icon_{name}_data[{16 * 4 + ICON_PX * row_bytes}] = {{")
+        for i, (r, g, b, a) in enumerate(icon_palette):
+            c_lines.append(f"    /* pal{i:2d} */ 0x{b:02X}, 0x{g:02X}, 0x{r:02X}, 0x{a:02X},")
+        for off in range(0, len(packed), row_bytes):
             c_lines.append("    " + ", ".join(
-                f"0x{(a << 24) | (r << 16) | (g << 8) | b:08X}" for r, g, b, a in row) + ",")
+                f"0x{v:02X}" for v in packed[off:off + row_bytes]) + ",")
         c_lines += [
             "};",
             "",
             f"static const lv_image_dsc_t icon_{name} = {{",
-            "    .header = { .cf = LV_COLOR_FORMAT_ARGB8888,",
-            f"                .w = {ICON_PX}, .h = {ICON_PX}, .stride = {ICON_PX} * 4 }},",
+            "    .header = { .cf = LV_COLOR_FORMAT_I4,",
+            f"                .w = {ICON_PX}, .h = {ICON_PX}, .stride = {ICON_PX} / 2 }},",
             f"    .data_size = sizeof(icon_{name}_data),",
             f"    .data = (const uint8_t *)icon_{name}_data,",
             "};",

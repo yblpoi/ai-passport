@@ -99,9 +99,16 @@ Store reusable source images and generated display assets in `images/`.
 - Source: `images/love_pixel_art_gen.py` (8×8 pixel masks plus a palette, no
   third-party dependencies).
 - Generated output:
-  - `images/love_pixel_art.c` and `main/love_pixel_art.h`: sixteen 40×40
-    ARGB8888 icons (masks scaled 5× — only integer factors avoid half pixels), a
-    48×48 RGB565 heart background tile, and `love_pixel_palette[16]`.
+  - `images/love_pixel_art.c` and `main/love_pixel_art.h`: sixteen 40×40 4 bpp
+    indexed (I4) icons (masks scaled 5× — only integer factors avoid half pixels),
+    a 48×48 RGB565 heart background tile, and `love_pixel_palette[16]`.
+  - The icons are I4 rather than ARGB8888: a 16-colour palette is embedded at the
+    head of each icon's data (as `lv_color32_t`, memory order B,G,R,A), followed by
+    the indices, two pixels per byte, high nibble first. That is the
+    `lv_bin_decoder` convention for `LV_IMAGE_SRC_VARIABLE` plus an indexed format,
+    so `LV_BIN_DECODER_RAM_LOAD` is not needed and rows are converted on demand
+    while drawing. Index 0 of the per-icon palette is fixed to transparent (the
+    icons are hollow), which is a separate table from the avatar palette below.
   - `images/web/`: PNGs exported from the same masks, `icons.json`/`assets.json`
     data URIs, the palette (`palette` field), and `contact-sheet.png` for manual
     review, all used by the admin page.
@@ -120,9 +127,9 @@ Store reusable source images and generated display assets in `images/`.
   `main/love_admin_page.h` by `tools/gen_admin_page.py`.
 - License: the icons and tile are original artwork for this repository and use
   the repository license.
-- Cost: about 326 KB of source and roughly 100 KB of Flash for icons, tile and
-  palette; ARGB8888 icons are converted while drawing and are never cached as a
-  full screen.
+- Cost: about 111 KB of source and roughly 18 KB of Flash for icons, tile and
+  palette (13.8 KB icons, 4.6 KB tile); I4 icons are converted row by row while
+  drawing and are never cached as a full screen.
 
 ### Lunar calendar table (love_lunar_table)
 

@@ -88,6 +88,19 @@ demo，也不要用该分支的旧版 BSP、分区表或配置覆盖当前版本
 可用命令：`help`、`status`（时间/网络/蓝牙/内存）、`wifi …`、`time <Unix 秒>` 对时、
 `ble on` / `ble off`。手机连上并订阅通知后，设备会自动把 `help` 的输出推过去。
 
+#### 从电脑上连
+
+`tools/ble_console.py` 是同一套服务的终端，所以带蓝牙的电脑不用手机、不用热点就能调参：
+
+```bash
+pip install bleak
+python3 tools/ble_console.py                 # 自动选第一个 LoveCount-*
+python3 tools/ble_console.py LoveCount-8C5E  # 按广播名选
+printf 'status\n' | python3 tools/ble_console.py   # 非交互，喂一批命令
+```
+
+前提是蓝牙已经打开（默认关闭，见下），扫描时会顺带打印 rssi，信号弱一眼能看出来。
+
 蓝牙默认关闭，开关存在配置记录的 `ble_enabled` 字段里，可以从设备设置页、后台网页
 或 `ble on` / `ble off` 命令三处切换。开启期间控制台任务还会盯空闲：**连续 5 分钟
 无人连接**就把协议栈停掉并把 `ble_enabled` 写回 0，归还约 51 KB 堆。手机连着的时候

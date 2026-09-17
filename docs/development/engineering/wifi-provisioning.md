@@ -102,6 +102,21 @@ Available commands: `help`, `status` (time, network, Bluetooth, memory), `wifi â
 connected and subscribed to notifications, the device pushes the output of `help`
 to it automatically.
 
+#### Connecting from a computer
+
+`tools/ble_console.py` is a terminal for the same service, so a laptop with a
+Bluetooth adapter can be used for debugging without a phone or the hotspot:
+
+```bash
+pip install bleak
+python3 tools/ble_console.py                 # picks the first LoveCount-* device
+python3 tools/ble_console.py LoveCount-8C5E  # by advertised name
+printf 'status\n' | python3 tools/ble_console.py   # non-interactive
+```
+
+Bluetooth has to be on before it can be found (see below), and the tool reports
+rssi while scanning so a weak link is obvious.
+
 Bluetooth is off by default and its switch lives in the `ble_enabled` field of the
 config record. It can be toggled from the device settings page, the admin web page,
 or the `ble on` / `ble off` command. While it is on, the console task also watches

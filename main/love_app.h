@@ -46,6 +46,11 @@ uint32_t love_app_deep_sleep_after_seconds(void);
 // 当前的自动熄屏档位(秒;0 = 常亮,同时意味着不会自动深睡)。
 uint32_t love_app_blank_off_seconds(void);
 
+// 调试模式:开着时设备不熄屏、不自动深睡,直到明确调用 love_app_set_debug(false)
+// (状态存 NVS,重启后仍然有效)。插着线调设备时用。
+bool love_app_debug_mode(void);
+void love_app_set_debug(bool on);
+
 // 请求一次"机身确认":屏幕弹出确认页,短按确定 = 允许,长按确定或超时 = 拒绝。
 // 返回 true 表示允许执行。**可以在非 LVGL 任务上调用**(内部自己取锁),
 // 调用方会被阻塞到有结论(最多 timeout_ms + 0.5 秒)。

@@ -136,6 +136,9 @@ static int64_t s_deep_sleep_retry_after_us;
 // 以及 USB 控制台的 sleep 命令),见 love_app_sleep_deep。
 static portMUX_TYPE s_sleep_entry_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_sleep_entry_claimed;
+// 调试模式:开着时不熄屏、不自动深睡,直到明确关掉(存 NVS,重启也算数)。
+// 插着线调设备时最怕它半路睡下去 —— 一睡 USB 就断电,连日志都收不到。
+static bool s_debug_mode;
 
 // 蓝牙链路上的危险命令要人在机身上按一下确定才执行(见 love_app_confirm_request):
 // 蓝牙是"近场但无需配对"的链路,任何人在旁边连上就能敲命令。结论用信号量交给
@@ -475,6 +478,13 @@ static void screen_off(void)
 // 还要回调进来刷新界面,在持锁的任务上做不安全。
 static void blank_off_poll(void)
 {
+    // 调试模式:不熄屏也不深睡(用户明确要求"主动关掉这个模式"之前一直这样)。
+    // USB 一连上就是调试场景,而深睡会把 USB 一起断掉,所以这条闸门必须在最前面。
+    if (s_debug_mode) {
+        screen_wake();
+        s_deep_sleep_due = false;
+        return;
+    }
 
     uint16_t limit = blank_off_seconds();
     if (limit == 0) {
@@ -1115,6 +1125,8 @@ static void render(void)
         if (s_list_count == 0) {
             main_hint = (s_page_count > 0) ? "上/下 切换 · 长按确定 设置" : "长按确定 设置";
         }
+        // 调试模式开着时把提示换掉:这一屏可能整晚亮着,得让人一眼看出是"故意不睡的"。
+        if (s_debug_mode) main_hint = "调试模式 · 不熄屏不深睡";
         hint_obj = cjk_small(s_scr, main_hint, COL_WHITE);
         lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
         lv_screen_load(s_scr);
@@ -1665,6 +1677,36 @@ uint32_t love_app_blank_off_seconds(void)
     return blank_off_seconds();
 }
 
+bool love_app_debug_mode(void)
+{
+    return s_debug_mode;
+}
+
+void love_app_set_debug(bool on)
+{
+    const bool changed = (s_debug_mode != on);
+    s_debug_mode = on;
+    if (on) {
+        // 开起来立刻生效:清掉"该睡了"的旗子并亮屏。
+        s_deep_sleep_due = false;
+    }
+    if (changed) {
+        // **两个方向都要重置空闲计时**:调试模式开着的时候可能已经过了几个小时,
+        // 不重置的话 `debug off` 之后下一个 tick 就会熄屏、再下一秒就深睡下去 ——
+        // 用户刚敲完命令,设备和串口就一起没了。关掉调试时他显然就在设备旁边。
+        note_input();
+        if (love_store_save_debug_mode(on) != ESP_OK) {
+            ESP_LOGW(TAG, "调试模式开关保存失败");
+        }
+        if (bsp_lvgl_lock(300)) {
+            screen_wake();
+            // 重绘交给 LVGL 任务:本函数可能跑在 4KB 栈的串口控制台任务上(见 s_render_request)。
+            s_render_request = true;
+            bsp_lvgl_unlock();
+        }
+    }
+}
+
 bool love_app_confirm_request(const char *action, uint32_t timeout_ms)
 {
     if (!action || timeout_ms == 0) return false;
@@ -1722,6 +1764,8 @@ void love_app_enter(void)
         s_store_ready = true;
     }
     love_store_load_config(&s_cfg);
+    // 调试模式存 NVS:插着线调设备时最怕它半路睡下去(一睡 USB 就断电,日志也收不到)。
+    s_debug_mode = love_store_load_debug_mode();
 
     s_view = VIEW_MAIN;
     s_sel = 0;

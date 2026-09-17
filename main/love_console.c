@@ -444,6 +444,9 @@ static int cmd_status(void *ctx, int argc, char **argv)
         power_sleep_last_deep_wake_text() != NULL) {
         love_console_out("深睡  上次由 %s 唤醒\n", power_sleep_last_deep_wake_text());
     }
+    if (love_app_debug_mode()) {
+        love_console_out("调试  开(不熄屏、不自动深睡;debug off 关掉)\n");
+    }
 
     // 这两个数比"剩余堆"更能预测网页能不能传大文件:Wi-Fi 驱动发一帧要一块
     // 约 1600 字节的连续内存,连续块不够时页面就传不动。
@@ -537,6 +540,36 @@ static int cmd_sleep(void *ctx, int argc, char **argv)
     love_console_out("用法: sleep light / sleep deep [秒]\n");
     return 1;
 }
+
+// 调试模式:开着时不熄屏、不自动深睡(存 NVS,重启也算数)。
+// **只能从 USB 打开**:蓝牙链路上把它打开等于让设备整晚亮屏不睡(耗电),
+// 而调试本来就要插线;关掉则允许从任何链路 —— 关掉只是恢复默认行为,没有危害。
+static int cmd_debug(void *ctx, int argc, char **argv)
+{
+    if (argc == 1 || strcmp(argv[1], "status") == 0) {
+        love_console_out("调试模式: %s(不熄屏、不自动深睡)\n",
+                         love_app_debug_mode() ? "开" : "关");
+        return 0;
+    }
+
+    bool on;
+    if (strcmp(argv[1], "on") == 0) {
+        on = true;
+    } else if (strcmp(argv[1], "off") == 0) {
+        on = false;
+    } else {
+        love_console_out("用法: debug / debug status / debug on / debug off\n");
+        return 1;
+    }
+
+    if (on && !require_usb(src_of(ctx), "打开调试模式")) return 1;
+
+    love_app_set_debug(on);
+    love_console_out(on ? "调试模式已打开:不熄屏、不自动深睡。\n"
+                        : "调试模式已关闭:恢复正常熄屏与深睡。\n");
+    return 0;
+}
+
 // 截屏的图是从 USB 串口出去的,蓝牙链路拿不到(150KB 也不适合走通知)。
 static int cmd_shot(void *ctx, int argc, char **argv)
 {
@@ -574,6 +607,7 @@ static const love_command_t COMMANDS[] = {
     // 发布流程按 docs/reference/y2lin/serial-screenshot-protocol.md 发的是这个字面量,
     // 所以它得是一条可用的命令名,而不是只写在文档里的约定。
     { "FAP_SCREENSHOT_V1", "同 shot", cmd_shot },
+    { "debug",  "调试模式:debug status / debug on / debug off(开着不熄屏不深睡,仅 USB 可开)", cmd_debug },
     { "sleep",  "调试:sleep light / sleep deep [秒](仅 USB;秒数 0 = 睡到有人按键)", cmd_sleep },
     { "key",    "调试:注入一次按键 key up|down|ok|long(仅 USB)", cmd_key },
     { "help",   "列出所有命令", cmd_help },

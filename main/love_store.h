@@ -51,6 +51,12 @@ bool love_store_load_ap_off(void);   // 没写过时返回 false(默认允许自
 // 显示给主人看,不走这条推导。首次(含老固件升上来)生成并落盘。
 // 返回 ESP_OK 表示 out 里是可用的密码。
 esp_err_t love_store_load_ap_pass(char *out, size_t size);
+
+// 调试模式闸门:开着时设备不熄屏、不自动深睡,直到主人明确关掉(见 love_app)。
+// 同样走独立键,避免动配置记录布局。
+esp_err_t love_store_save_debug_mode(bool on);
+bool love_store_load_debug_mode(void);
+
 // 最后一次成功对时(UTC 秒 + 来源)。
 esp_err_t love_store_save_time(uint64_t epoch_seconds, love_time_src_t src);
 bool love_store_load_time(uint64_t *epoch_seconds, love_time_src_t *src);

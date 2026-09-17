@@ -20,6 +20,7 @@ static const char *TAG = "love_store";
 #define KEY_WIFI_PASS "wifi_pass"
 #define KEY_AP_OFF "ap_off"
 #define KEY_AP_PASS "ap_pass"
+#define KEY_DEBUG "debug"
 #define KEY_TIME "time"
 #define KEY_DAYS_CACHE "days"
 #define KEY_AVATAR_PREFIX "av"    // NVS key 上限 15 字节:av0..av3
@@ -303,6 +304,34 @@ esp_err_t love_store_load_ap_pass(char *out, size_t size)
     snprintf(out, size, "%s", generated);
     return ESP_OK;
 }
+
+esp_err_t love_store_save_debug_mode(bool on)
+{
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_u8(handle, KEY_DEBUG, on ? 1 : 0);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    return err;
+}
+
+bool love_store_load_debug_mode(void)
+{
+    if (!s_ready) return false;
+
+    nvs_handle_t handle;
+    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
+
+    uint8_t value = 0;
+    esp_err_t err = nvs_get_u8(handle, KEY_DEBUG, &value);
+    nvs_close(handle);
+    return err == ESP_OK && value != 0;
+}
+
 esp_err_t love_store_save_time(uint64_t epoch_seconds, love_time_src_t src)
 {
     if (!s_ready) return ESP_ERR_INVALID_STATE;

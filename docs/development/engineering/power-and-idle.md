@@ -18,6 +18,7 @@ nothing here tries to squeeze the standby current below what that firmware does.
 | --- | --- | --- | --- |
 | Blank off | No **button press** for `blank_off_seconds` (15 s / 30 s / 1 min / 3 min, or "always on" = never) | The screen returns to the home screen **first**, then the backlight goes off | `screen_off()`, `blank_off_poll()` in `main/love_app.c` |
 | Deep sleep | `IDLE_DEEP_SLEEP_S` (**300 s**, the official five idle minutes) since the last button press, screen already off, and nobody using it (see below) | Wi-Fi/BLE/HTTP are stopped, the wake source is armed, then the peripherals are shut down in a fixed order and the chip sleeps **until a button is pressed** | `love_app_idle_poll()` → `love_app_sleep_deep(0)` → `power_sleep_deep_for(0)` → `run_deep_sleep()` |
+| Debug mode | `debug on` over USB (persisted in NVS) | **Neither stage above happens** until `debug off` | `love_app_set_debug()`, the `debug` command in `main/love_console.c` |
 
 Note the asymmetry in the first two rows: the **blank-off counts button presses only**,
 while the deep sleep additionally waits for the web and Bluetooth links to go quiet.
@@ -131,7 +132,17 @@ is removed at the source instead.
 
 Also worth knowing: **USB-Serial-JTAG is powered down in deep sleep**, so the serial
 port disappears and a host cannot wake the device.
+That is what debug mode is for.
 
+## Debug mode
+
+`debug on` (USB only) keeps the screen on and suppresses both idle stages until
+`debug off`. It is stored in NVS so flashing/rebooting in the middle of a session does not
+silently re-enable sleeping, and the home screen hint changes to a debug-mode hint (screen
+stays on, no deep sleep) so an accidentally left-on device is obvious. Turning it *off* is
+allowed from any link (Bluetooth included): leaving the mode only restores the default
+behaviour, and it resets the idle timer so that the device does not blank-and-sleep the
+instant the command returns.
 
 ## Measured on the real board (2026-09-17, ESP32-C3 rev v1.1)
 
@@ -144,6 +155,7 @@ port disappears and a host cannot wake the device.
 | Wake source | Buttons only for the idle path; no timer |
 | Deep-sleep teardown order | CW2017 → ES8311 → I2S → shared I2C → ST7789, plus arm-then-check ordering, asserted by `tests/test_deep_sleep_contract.py` |
 | Manual light sleep (`sleep light`) | Still works: codec suspended/restored, screen off/on, screen returns |
+| Debug mode | `debug on`: after 92 s of no input (blank-off setting 30 s) the screen was **still lit**; `debug off` reset the idle counter to 2 s |
 | Free heap before the sleep request | ~79.6 KB (largest contiguous block 65,536) |
 | NVS across a flash | Preserved: no "config record version/length mismatch" line, Wi-Fi credentials and settings intact |
 

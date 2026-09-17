@@ -10,6 +10,8 @@
 
 // UTF-8 字节上限(含结尾 NUL)。中文字符约占 3 字节,24 字节约 8 个汉字。
 #define LOVE_NAME_MAX 25
+// 分类名与事件名同宽:都是 8 个汉字。
+#define LOVE_CATEGORY_MAX 25
 // 设备端最多保存的事件条目数(与 lovestore 的 NVS 记录一一对应)。
 #define LOVE_EVENT_MAX 8
 // 主屏底部的两个人。
@@ -41,6 +43,7 @@ typedef struct {
     uint8_t kind;               // love_event_kind_t
     love_date_t date;           // YEARLY/LUNAR 只用 month/day,ONCE 用完整日期
                                 // (LUNAR 时 month/day 是农历)
+    char category[LOVE_CATEGORY_MAX];   // 用户自定义的分类名,空串 = 不分类
 } love_event_t;
 
 // 日期编辑界面里被选中的字段。

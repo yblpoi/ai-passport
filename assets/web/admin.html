@@ -104,7 +104,13 @@
     <div class="row" style="margin-top:12px">
       <button type="button" class="primary" id="syncTime">用手机当前时间对时</button>
     </div>
-    <p class="muted">设备没有时钟。联网后会自动走 SNTP；也可以通过本按钮用手机时间来对时（不依赖外网）。</p>
+    <label for="bleEnabled">蓝牙对时</label>
+    <select id="bleEnabled">
+      <option value="1">开（可用 nRF Connect 对时）</option>
+      <option value="0">关（出厂默认，省内存）</option>
+    </select>
+    <p class="muted">设备没有时钟。联网后会自动走 SNTP；也可以点上面的按钮用手机时间来对时（不依赖外网）。
+      蓝牙只用于对时，默认关闭：关着时上面两种对时都不受影响，需要 nRF Connect 那种对时方式时再打开。</p>
   </div>
 
   <div class="card">
@@ -139,7 +145,7 @@
       <button type="button" class="primary" id="save">保存到设备</button>
       <button type="button" class="ghost" id="reload">放弃改动</button>
     </div>
-    <p class="muted">BLE 对时：手机用 nRF Connect 等工具连接设备，向服务 A001 的 A002 特征写入 Unix 时间戳（秒，十进制文本或 8 字节小端）即可。</p>
+    <p class="muted">BLE 对时：先在「时间」里把蓝牙对时打开，再用 nRF Connect 等工具连接设备，向服务 A001 的 A002 特征写入 Unix 时间戳（秒，十进制文本或 8 字节小端）即可。</p>
   </div>
 </div>
 <div class="toast" id="toast"></div>

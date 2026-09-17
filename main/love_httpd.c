@@ -163,6 +163,9 @@ static cJSON *config_to_json(const love_config_t *cfg)
     cJSON_AddStringToObject(root, "start", buf);
     // 自动熄屏秒数,0 = 常亮。后台页据此回填下拉框。
     cJSON_AddNumberToObject(root, "blankOff", cfg->blank_off_seconds);
+    // 展示模式(列表/单页)与蓝牙开关。
+    cJSON_AddNumberToObject(root, "displayMode", cfg->display_mode);
+    cJSON_AddBoolToObject(root, "bleEnabled", cfg->ble_enabled != 0);
 
     cJSON *people = cJSON_AddArrayToObject(root, "people");
     for (size_t i = 0; i < LOVE_PERSON_MAX; i++) {
@@ -179,6 +182,7 @@ static cJSON *config_to_json(const love_config_t *cfg)
         cJSON_AddStringToObject(item, "name", event->name);
         cJSON_AddNumberToObject(item, "icon", event->icon);
         cJSON_AddNumberToObject(item, "kind", event->kind);
+        cJSON_AddStringToObject(item, "category", event->category);
         if (event->kind == LOVE_EVENT_LUNAR) {
             // 农历事件用独立的月/日字段,不伪造一个公历日期
             cJSON_AddNumberToObject(item, "lunarMonth", event->date.month);
@@ -396,6 +400,16 @@ static esp_err_t handle_config(httpd_req_t *req)
         cfg.blank_off_seconds = (uint16_t)blank->valueint;
     }
 
+    // 展示模式与蓝牙开关:字段缺失或取值非法时保留原值 —— 浏览器缓存的旧
+    // admin.js 不带这些字段,一次保存就把设置抹掉是不能接受的。
+    const cJSON *mode = cJSON_GetObjectItem(root, "displayMode");
+    if (cJSON_IsNumber(mode) &&
+        (mode->valueint == (int)LOVE_DISPLAY_LIST || mode->valueint == (int)LOVE_DISPLAY_PAGE)) {
+        cfg.display_mode = (uint8_t)mode->valueint;
+    }
+    const cJSON *ble = cJSON_GetObjectItem(root, "bleEnabled");
+    if (cJSON_IsBool(ble)) cfg.ble_enabled = cJSON_IsTrue(ble) ? 1 : 0;
+
     const cJSON *people = cJSON_GetObjectItem(root, "people");
     if (cJSON_IsArray(people)) {
         size_t index = 0;
@@ -427,13 +441,21 @@ static esp_err_t handle_config(httpd_req_t *req)
             const cJSON *date = cJSON_GetObjectItem(item, "date");
             const cJSON *lunar_month = cJSON_GetObjectItem(item, "lunarMonth");
             const cJSON *lunar_day = cJSON_GetObjectItem(item, "lunarDay");
+            const cJSON *category = cJSON_GetObjectItem(item, "category");
 
             love_event_t *event = &cfg.events[count];
+            // 旧缓存页面不带 category:按同下标保留老值,别把用户分好的类抹掉。
+            // (旧页面的顺序也是它自己那份,所以同下标就是同一条事件。)
+            char keep_category[LOVE_CATEGORY_MAX];
+            love_utf8_copy(keep_category, sizeof(keep_category),
+                           count < cfg.event_count ? cfg.events[count].category : "");
             memset(event, 0, sizeof(*event));
             if (cJSON_IsString(name)) {
                 snprintf(event->name, sizeof(event->name), "%s", name->valuestring);
             }
             if (event->name[0] == '\0') snprintf(event->name, sizeof(event->name), "纪念日");
+            love_utf8_copy(event->category, sizeof(event->category),
+                           cJSON_IsString(category) ? category->valuestring : keep_category);
             if (cJSON_IsNumber(icon) && icon->valueint >= 0 && icon->valueint < LOVE_ICON_TOTAL) {
                 event->icon = (uint8_t)icon->valueint;
             }

@@ -21,23 +21,6 @@ static const char *TAG = "love_store";
 
 // 配置写盘时带版本号,后续结构变化可以识别而不是误读旧数据。
 // v2:加入 blank_off_seconds(自动熄屏秒数)。
-#define LOVE_CONFIG_VERSION 2u
-
-// 自动熄屏档位(秒);0 = 常亮。顺序与设置页的档位标签一一对应,不要单独调整。
-const uint16_t LOVE_BLANK_OFF_SECONDS[LOVE_BLANK_OFF_COUNT] = { 15, 30, 60, 180, 0 };
-
-bool love_blank_off_valid(uint16_t seconds)
-{
-    for (size_t i = 0; i < LOVE_BLANK_OFF_COUNT; i++) {
-        if (LOVE_BLANK_OFF_SECONDS[i] == seconds) return true;
-    }
-    return false;
-}
-
-typedef struct {
-    uint32_t version;
-    love_config_t config;
-} config_record_t;
 
 typedef struct {
     uint64_t epoch_seconds;
@@ -63,16 +46,7 @@ typedef struct {
 
 static bool s_ready;
 
-static void copy_name(char *dst, const char *src, size_t size)
-{
-    if (!src || size == 0) return;
-    size_t len = strlen(src);
-    if (len >= size) len = size - 1;
-    memcpy(dst, src, len);
-    dst[len] = '\0';
-}
-
-static void love_config_defaults(love_config_t *cfg)
+void love_config_defaults(love_config_t *cfg)
 {
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
@@ -82,9 +56,9 @@ static void love_config_defaults(love_config_t *cfg)
     cfg->start.month = 8;
     cfg->start.day = 13;
 
-    copy_name(cfg->people[0].name, "咕咕", sizeof(cfg->people[0].name));
+    love_utf8_copy(cfg->people[0].name, sizeof(cfg->people[0].name), "咕咕");
     cfg->people[0].icon = LOVE_ICON_BIRD;
-    copy_name(cfg->people[1].name, "嘎嘎", sizeof(cfg->people[1].name));
+    love_utf8_copy(cfg->people[1].name, sizeof(cfg->people[1].name), "嘎嘎");
     cfg->people[1].icon = LOVE_ICON_CAT;
 
     // 默认给三个固定的公历节日 + 生日,再补三个农历节日(春节/中秋/端午),
@@ -108,7 +82,7 @@ static void love_config_defaults(love_config_t *cfg)
     const size_t count = sizeof(DEFAULTS) / sizeof(DEFAULTS[0]);
     for (size_t i = 0; i < count && i < LOVE_EVENT_MAX; i++) {
         love_event_t *event = &cfg->events[i];
-        copy_name(event->name, DEFAULTS[i].name, sizeof(event->name));
+        love_utf8_copy(event->name, sizeof(event->name), DEFAULTS[i].name);
         event->icon = DEFAULTS[i].icon;
         event->kind = (uint8_t)DEFAULTS[i].kind;
         event->date.year = cfg->start.year;
@@ -116,45 +90,10 @@ static void love_config_defaults(love_config_t *cfg)
         event->date.day = (int8_t)DEFAULTS[i].day;
     }
     cfg->event_count = (uint8_t)count;
-    cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;   // 出厂默认档位,任意键唤醒
-}
-
-// 载入的数据可能来自旧版本或被写坏,这里统一做一次合法性收敛。
-static void sanitize_config(love_config_t *cfg)
-{
-    if (!love_date_valid(cfg->start)) {
-        cfg->start = (love_date_t){ 2000, 1, 1 };
-    }
-    for (size_t i = 0; i < LOVE_PERSON_MAX; i++) {
-        cfg->people[i].name[LOVE_NAME_MAX - 1] = '\0';
-        if (cfg->people[i].name[0] == '\0') {
-            copy_name(cfg->people[i].name, i == 0 ? "我" : "TA",
-                      sizeof(cfg->people[i].name));
-        }
-        if (cfg->people[i].icon >= LOVE_ICON_TOTAL) cfg->people[i].icon = 0;
-    }
-    // 熄屏秒数只接受已知档位,别的一律回到默认档。
-    if (!love_blank_off_valid(cfg->blank_off_seconds)) {
-        cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;
-    }
-    if (cfg->event_count > LOVE_EVENT_MAX) cfg->event_count = LOVE_EVENT_MAX;
-    for (size_t i = 0; i < cfg->event_count; i++) {
-        love_event_t *event = &cfg->events[i];
-        event->name[LOVE_NAME_MAX - 1] = '\0';
-        if (event->name[0] == '\0') copy_name(event->name, "纪念日", sizeof(event->name));
-        if (event->icon >= LOVE_ICON_TOTAL) event->icon = 0;
-        if (event->kind > LOVE_EVENT_LUNAR) event->kind = LOVE_EVENT_YEARLY;
-        if (event->kind == LOVE_EVENT_LUNAR) {
-            // 农历事件:month/day 是农历月日,day = 0 表示月末(除夕)。
-            // 这里不能按公历校验(date_valid 会要求具体年月日),单独收敛。
-            if (event->date.month < 1 || event->date.month > 12) event->date.month = 1;
-            if (event->date.day < 0 || event->date.day > 30) event->date.day = 1;
-            continue;   // 跳过下面的公历日期校验
-        }
-        if (!love_date_valid(event->date)) {
-            event->date = (love_date_t){ cfg->start.year, 1, 1 };
-        }
-    }
+    cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;
+    // 出厂行为:保持原来的单页浏览,蓝牙关掉(用户可分别改)。
+    cfg->display_mode = LOVE_DISPLAY_PAGE;
+    cfg->ble_enabled = 0;   // 出厂默认档位,任意键唤醒
 }
 
 esp_err_t love_store_init(void)
@@ -187,17 +126,20 @@ void love_store_load_config(love_config_t *cfg)
     nvs_handle_t handle;
     if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return;
 
-    config_record_t record;
-    size_t size = sizeof(record);
-    esp_err_t err = nvs_get_blob(handle, KEY_CONFIG, &record, &size);
-    if (err == ESP_OK && size == sizeof(record) && record.version == LOVE_CONFIG_VERSION) {
-        *cfg = record.config;
-    } else if (err == ESP_OK) {
-        ESP_LOGW(TAG, "配置记录版本或长度不符,回落到默认值");
+    // 先探长度再读:老记录(v2)比现在短,按固定长度读会对不上,而长度又决定怎么解释字节。
+    love_config_record_t record;
+    size_t size = 0;
+    esp_err_t err = nvs_get_blob(handle, KEY_CONFIG, NULL, &size);
+    if (err == ESP_OK && size <= sizeof(record)) {
+        err = nvs_get_blob(handle, KEY_CONFIG, &record, &size);
+        if (err == ESP_OK && !love_config_from_record(&record, size, cfg)) {
+            ESP_LOGW(TAG, "配置记录版本或长度不符(%u 字节),回落到默认值", (unsigned)size);
+            love_config_defaults(cfg);
+        }
     }
     nvs_close(handle);
 
-    sanitize_config(cfg);
+    love_config_sanitize(cfg);
 }
 
 esp_err_t love_store_save_config(const love_config_t *cfg)
@@ -205,9 +147,9 @@ esp_err_t love_store_save_config(const love_config_t *cfg)
     if (!cfg) return ESP_ERR_INVALID_ARG;
     if (!s_ready) return ESP_ERR_INVALID_STATE;
 
-    config_record_t record = { .version = LOVE_CONFIG_VERSION };
+    love_config_record_t record = { .version = LOVE_CONFIG_VERSION };
     record.config = *cfg;
-    sanitize_config(&record.config);
+    love_config_sanitize(&record.config);
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);

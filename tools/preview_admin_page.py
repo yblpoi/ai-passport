@@ -31,9 +31,11 @@ MOCK_STATE = {
     "config": {
         "start": "2000-01-01",
         "blankOff": 30,
+        "displayMode": 1,
+        "bleEnabled": False,
         "people": [{"name": "咕咕", "icon": 0}, {"name": "嘎嘎", "icon": 1}],
         "events": [
-            {"name": "元旦", "icon": 12, "kind": 0, "date": "2026-01-01"},
+            {"name": "元旦", "icon": 12, "kind": 0, "date": "2026-01-01", "category": "节假日"},
             {"name": "情人节", "icon": 6, "kind": 0, "date": "2026-02-14"},
             {"name": "咕咕嘎嘎", "icon": 10, "kind": 0, "date": "2000-01-01"},
             {"name": "国庆节", "icon": 7, "kind": 0, "date": "2026-10-01"},

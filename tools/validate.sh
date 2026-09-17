@@ -38,6 +38,8 @@ run_static_checks() (
     }
 
     run_host_test test_ui_pixel_math main main/ui_pixel_math.c
+    # 配置的版本迁移:全仓最容易静默清空用户数据的一段逻辑,必须有主机测试。
+    run_host_test test_love_config main main/love_config.c main/love_date.c main/love_lunar.c
     # love_date.c 的农历事件会调 love_lunar,所以两个测试都要带上 love_lunar.c。
     run_host_test test_love_date main main/love_date.c main/love_lunar.c
     # 农历换算依赖 tools/gen_lunar_table.py 生成的表,同样按纯逻辑测。

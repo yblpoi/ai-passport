@@ -5,6 +5,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "love_config.h"
 #include "love_date.h"
 
 // 时间来源,用于界面提示“时间从哪来”。
@@ -18,35 +19,12 @@ typedef enum {
 #define LOVE_WIFI_SSID_MAX 33
 #define LOVE_WIFI_PASS_MAX 65
 
-// 自动熄屏档位(秒),0 表示常亮。设置页的档位标签、配置校验与后台写入校验
-// 共用同一张表,档位有变只需改这里。
-#define LOVE_BLANK_OFF_COUNT 5
-#define LOVE_BLANK_OFF_DEFAULT 30
-extern const uint16_t LOVE_BLANK_OFF_SECONDS[LOVE_BLANK_OFF_COUNT];
-
-// seconds 是否属于已知档位。
-bool love_blank_off_valid(uint16_t seconds);
-
-// 自定义头像槽位保存的是"定长 4bpp 索引包":40x40 像素、每字节 2 像素、
-// 高半字节在前(顺序与 assets/web/admin.html 的 compressAvatar 一致)。
-// 每个槽位固定 LOVE_AVATAR_BYTES 字节,便于按槽位随机读写。
-#define LOVE_AVATAR_BYTES 800
-
-typedef struct {
-    char name[LOVE_NAME_MAX];
-    uint8_t icon;
-} love_person_t;
-
-typedef struct {
-    love_date_t start;                        // 在一起起始日
-    love_person_t people[LOVE_PERSON_MAX];    // 主屏顶部的两个人
-    uint8_t event_count;                      // 有效事件数,<= LOVE_EVENT_MAX
-    uint16_t blank_off_seconds;               // 自动熄屏秒数,0 = 常亮
-    love_event_t events[LOVE_EVENT_MAX];      // 事件列表
-} love_config_t;
-
 // 初始化 NVS 并载入已保存的配置(缺失时写入默认值)。
 esp_err_t love_store_init(void);
+
+// 出厂默认配置。实现留在本文件对应的 .c 里:默认事件要写 LOVE_ICON_BIRD 这类
+// 图标序号宏,而它们所在的 love_pixel_art.h 包含 lvgl.h,纯逻辑文件不能碰。
+void love_config_defaults(love_config_t *cfg);
 
 // 载入/保存倒计时配置。load 失败时返回默认值,不返回错误。
 void love_store_load_config(love_config_t *cfg);

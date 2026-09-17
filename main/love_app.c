@@ -75,6 +75,7 @@ typedef enum {
     ACT_SYNC,
     ACT_BLANK_OFF,
     ACT_STATUS,
+    ACT_BLE_TOGGLE,
     ACT_SLEEP_LIGHT,
     ACT_SLEEP_DEEP,
     ACT_BACK,
@@ -436,7 +437,7 @@ static const action_t SETTING_ACTIONS[SETTINGS_ROWS] = {
     ACT_NONE,        // 网络
     ACT_SYNC,        // 时间
     ACT_BLANK_OFF,   // 自动熄屏
-    ACT_NONE,        // 蓝牙对时
+    ACT_BLE_TOGGLE,  // 蓝牙对时(开关)
     ACT_STATUS,      // 本机状态
     ACT_BACK,        // 返回主屏
 };
@@ -495,8 +496,10 @@ static int build_settings(setting_row_t *rows)
     count++;
 
     rows[count].label = "蓝牙对时";
+    // 显示"配置状态"而不是 love_ble_ready():后者是运行时结果,打开失败时会与
+    // 用户刚选的值不一致,失败已经由 set_note 提示了。
     snprintf(rows[count].value, sizeof(rows[count].value), "%s",
-             love_ble_ready() ? "广播中" : "未广播");
+             s_cfg.ble_enabled ? "开" : "关");
     count++;
 
     rows[count].label = "本机状态";
@@ -1067,6 +1070,30 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         }
         break;
     }
+    case ACT_BLE_TOGGLE: {
+        // love_ble_stop() 要等 NimBLE host 任务退出,必须在 LVGL 锁外调用;
+        // 这段 switch 本来就是"慢操作",放在锁外执行。
+        const bool want = !s_cfg.ble_enabled;
+        esp_err_t err = ESP_OK;
+        if (want) {
+            err = love_ble_start();
+        } else if (love_ble_ready()) {
+            err = love_ble_stop();
+        }
+        if (err == ESP_OK) {
+            s_cfg.ble_enabled = want ? 1 : 0;
+            if (love_store_save_config(&s_cfg) != ESP_OK) {
+                ESP_LOGW(TAG, "蓝牙开关保存失败");
+            }
+        }
+        if (bsp_lvgl_lock(300)) {
+            set_note(err == ESP_OK ? (want ? "蓝牙已打开" : "蓝牙已关闭")
+                                   : "蓝牙操作失败");
+            render();
+            bsp_lvgl_unlock();
+        }
+        break;
+    }
     case ACT_SYNC: {
         love_net_status_t net;
         love_net_get_status(&net);
@@ -1205,7 +1232,9 @@ esp_err_t love_app_start(void)
     if (love_httpd_start() != ESP_OK) {
         ESP_LOGW(TAG, "后台网页启动失败");
     }
-    if (love_ble_start() != ESP_OK) {
+    // 蓝牙按配置启停,出厂默认关。关掉能把 NimBLE 的任务栈与控制器缓冲还给系统堆
+    // (这个固件的堆一向紧张),代价是没有 BLE 对时 —— Wi-Fi/SNTP 与网页手动对时不受影响。
+    if (s_cfg.ble_enabled && love_ble_start() != ESP_OK) {
         ESP_LOGW(TAG, "BLE 对时服务启动失败");
     }
 

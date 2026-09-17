@@ -404,6 +404,7 @@ function iconPicker(container, onPick, selected, onAvatarChanged){
 function renderAll(){
   byId("start").value = model.start;
   byId("blankOff").value = String(model.blankOff ?? 30);
+  byId("bleEnabled").value = model.bleEnabled ? "1" : "0";
   byId("nameA").value = model.people[0].name;
   byId("nameB").value = model.people[1].name;
   iconPicker(byId("iconsA"), (i)=>{ model.people[0].icon = i; renderAll(); },
@@ -572,6 +573,7 @@ byId("addEvent").onclick = () => {
 };
 byId("start").onchange = (e) => { model.start = e.target.value; renderPreview(); };
 byId("blankOff").onchange = (e) => { model.blankOff = Number(e.target.value); };
+byId("bleEnabled").onchange = (e) => { model.bleEnabled = e.target.value === "1"; };
 byId("nameA").oninput = (e) => { model.people[0].name = e.target.value; renderPreview(); };
 byId("nameB").oninput = (e) => { model.people[1].name = e.target.value; renderPreview(); };
 

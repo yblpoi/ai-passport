@@ -157,5 +157,10 @@ never dropped automatically.
 Stopping the stack has to happen in an ordinary task (`nimble_port_stop()` waits for
 the NimBLE host task without a timeout), so `main/love_ble.c` owns a 4 KB console
 task that executes commands, decides when to stop, and splits output into
-notifications sized to the negotiated MTU. That task is created the first time
-Bluetooth starts and stays for the lifetime of the process.
+notifications sized to the negotiated MTU. That task is created *before*
+`nimble_port_init()` — once NimBLE is up the heap is too fragmented for a
+contiguous 4 KB stack — and it exits again when Bluetooth is stopped, so the stack
+goes back to the system heap. Keeping it alive permanently cost far more than it
+looks: on this device the largest contiguous free block fell from 69,632 to 34,816
+bytes after Bluetooth had been used once, and the Wi-Fi driver needs a large block
+to send a frame.

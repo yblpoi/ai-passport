@@ -79,6 +79,11 @@ static uint16_t s_tx_handle;
 static love_line_t s_line;
 static QueueHandle_t s_cmd_queue;
 static TaskHandle_t s_console_task;
+// 控制台任务的"代":每建一个任务就 +1,s_console_stop_gen 记下"已被要求退出的最高代"。
+// 任务是"自己退出"的(vTaskDelete(NULL)),而代际号解决的是"上一个还没退干净,新的已经建起来"
+// 这个窗口 —— 只认自己的代,就不会把新任务的退出请求当成自己的,也不会反过来赖着不走。
+static uint32_t s_console_gen;
+static volatile uint32_t s_console_stop_gen;
 static volatile uint32_t s_idle_since_s;
 static volatile bool s_stop_requested;
 // 正在拆栈。ble_gap_adv_stop() 与 ble_gap_terminate() 都会回调到这里,
@@ -338,10 +343,14 @@ static void request_shutdown(void)
 
 static void console_task(void *arg)
 {
-    (void)arg;
+    // 自己那一代的号,见 s_console_gen 的说明。
+    const uint32_t gen = (uint32_t)(uintptr_t)arg;
     char line[LOVE_LINE_MAX];
 
     for (;;) {
+        // 蓝牙已经关掉(见 love_ble_stop):这个任务留着没有意义,退出并把栈还给系统堆。
+        if (s_console_stop_gen >= gen) break;
+
         if (xQueueReceive(s_cmd_queue, line, pdMS_TO_TICKS(BLE_CONSOLE_TICK_MS)) == pdTRUE) {
             (void)love_console_exec(line, LOVE_CONSOLE_SRC_BLE);
             if (s_stop_requested) {
@@ -361,15 +370,21 @@ static void console_task(void *arg)
             request_shutdown();
         }
     }
+
+    // 句柄由 love_ble_stop() 摘(两处都在状态转换锁内,不会互相覆盖),这里只管退出。
+    vTaskDelete(NULL);
 }
 
-// 任务**永不删除**:删掉它要处理"任务删自己"和重复创建两类麻烦,而它只在
-// 第一次开蓝牙时才建,之后常驻 4KB 换掉的是整个 NimBLE 的 51KB。
+// 控制台任务**随蓝牙开停**。它必须在 nimble_port_init() 之前建(要一块连续 4KB,
+// NimBLE 起来之后堆就碎了),但关栈之后不能一直赖在堆里:实测只在本次开机开过一次
+// 蓝牙,最大连续块就从 69,632 掉到 34,816 —— WiFi 发一帧要大块连续内存,
+// 这个代价比"重复建任务"的麻烦大得多。所以关栈时让它自己退出(见 love_ble_stop)。
 static void ensure_console_task(void)
 {
     if (s_console_task) return;
 
     if (!s_cmd_queue) {
+        // 队列常驻:任务可能正阻塞在它上面,删队列会踩到阻塞中的任务;它只有几百字节。
         s_cmd_queue = xQueueCreate(BLE_CMD_QUEUE_LEN, LOVE_LINE_MAX);
         if (!s_cmd_queue) {
             ESP_LOGE(TAG, "创建蓝牙命令队列失败");
@@ -377,8 +392,9 @@ static void ensure_console_task(void)
         }
     }
 
-    if (xTaskCreate(console_task, "love_ble_con", BLE_CONSOLE_STACK, NULL,
-                    BLE_CONSOLE_PRIO, &s_console_task) != pdPASS) {
+    const uint32_t gen = ++s_console_gen;
+    if (xTaskCreate(console_task, "love_ble_con", BLE_CONSOLE_STACK,
+                    (void *)(uintptr_t)gen, BLE_CONSOLE_PRIO, &s_console_task) != pdPASS) {
         s_console_task = NULL;
         ESP_LOGE(TAG, "创建蓝牙控制台任务失败(堆余 %u,最大连续块 %u):"
                       "蓝牙仍可用,但没有串口控制台也不会空闲自动关",
@@ -540,6 +556,14 @@ esp_err_t love_ble_stop(void)
     s_stop_in_progress = false;
     s_host_done = false;
     s_shutting_down = false;
+
+    // 到这里 NimBLE 已经完全落地,控制台任务没有活干了:让它自己退出,把那 4KB 栈
+    // 还给系统堆(否则"本次开机用过一次蓝牙"就会永久少一块大连续内存,见 ensure_console_task)。
+    // 句柄与代际号在这里摘/记 —— 本函数与 love_ble_start() 同在 s_transitioning 的互斥下,
+    // 所以不会和"新建任务"那一侧互相覆盖;任务本身只负责退出,不碰句柄。
+    s_console_stop_gen = s_console_gen;
+    s_console_task = NULL;
+
     end_transition();
     return ESP_OK;
 }

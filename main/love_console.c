@@ -15,7 +15,6 @@
 #include "love_net.h"
 #include "love_time.h"
 
-#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -54,8 +53,8 @@ void love_console_out(const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    // stdout 已在 start() 里设成非阻塞:设备只插充电器(没有 USB 主机)时
-    // ring buffer 不会有人排空,阻塞写会把调用它的任务连同整条链路一起卡住。
+    // stdout 走默认路径:设备没有 USB 主机时 usb_serial_jtag_write() 直接返回 -1,
+    // 写不出去也不会卡住任何任务(见 start() 里关于非阻塞开关的说明)。
     fputs(buf, stdout);
     if (s_out) s_out(buf, strlen(buf));
 }
@@ -325,10 +324,11 @@ esp_err_t love_console_start(void)
         return err;
     }
 
-    // 没有 USB 主机(设备只插充电器)时,USB-Serial-JTAG 的 TX FIFO 永远没人排空,
-    // 阻塞写会把调用方永久卡住 —— BLE 串口敲一条命令就会把控制台和 NimBLE host
-    // 一起拖死。设成非阻塞后写不进去就丢弃,这正是调试口该有的行为。
-    usb_serial_jtag_vfs_use_nonblocking();
+    // 这里**不要**调 usb_serial_jtag_vfs_use_nonblocking()。它不但没有必要,还会把
+    // 控制台打死:设备没有 USB 主机时 usb_serial_jtag_write() 本来就直接返回 -1
+    // (写不出去,不阻塞),而那个开关同时把**读**也变成非阻塞 —— REPL 的阻塞读
+    // 立刻返回空,于是它以最高优先级疯狂重印提示符,实测 12 秒刷了 490KB 的 "> ",
+    // 顺带把 CPU 占满。所以输出直接走 stdout 的默认(阻塞)路径就是安全的。
 
     for (size_t i = 0; i < ARRAY_SIZE(COMMANDS); i++) {
         const esp_console_cmd_t cmd = {

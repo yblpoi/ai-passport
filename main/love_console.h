@@ -4,8 +4,9 @@
 // 敲(见 love_ble.h)。两条链路共享同一张命令表,所以这里只定义"一行怎么执行",
 // 不关心它是从哪根线进来的。
 //
-// 命令的输出同时写 stdout 与已注册的 BLE 出口;stdout 在 love_console_start() 里
-// 被设成非阻塞,否则设备只插充电器(没有 USB 主机)时 printf 会把整条链路卡死。
+// 命令的输出同时写 stdout 与已注册的 BLE 出口:USB 上敲的命令在 USB 上看得见,
+// 手机敲的在手机上看得见,两边都挂着时互为镜像。没有 USB 主机时 stdout 会直接
+// 丢弃(VFS 检测到未连接就返回 -1),不会卡住调用它的任务。
 #pragma once
 
 #include "esp_err.h"

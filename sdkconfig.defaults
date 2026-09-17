@@ -126,9 +126,11 @@ CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=8
 # 刻意**不动** MSYS_1(12×256B):串口控制台的输出走 ble_hs_mbuf_from_flat()
 # 从 MSYS_1 取块,裁小会在手机读得慢时丢字。
 
-# NimBLE host 任务默认 4096,实测水位见设备上的 `status` 命令(读 nimble_host
-# 任务的 uxTaskGetStackHighWaterMark)。它只跑协议栈回调,回调里只入队不打印。
-CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=3072
+# NimBLE host 任务栈。曾按 IDF 默认往下裁到 3072,真机上用 `status` 读
+# nimble_host 的 uxTaskGetStackHighWaterMark 发现**只剩 516 字节余量**(栈深 3072),
+# 偏薄:配对、长写、MTU 交换这些路径都可能比实测那条更深。省 1KB 不值得冒栈溢出的
+# 风险,写回默认值并显式留在这里,免得再被"顺手裁一刀"。
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=4096
 
 # 控制器侧:6 个并发 BLE 活动我们只用得上 2 个(一个广播集 + 一条连接)。
 # 广播上报缓冲是给扫描用的,而设备从不做 BLE 扫描(附近 Wi-Fi 扫描走的是 Wi-Fi),

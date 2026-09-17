@@ -106,7 +106,7 @@ NVS**（`love_store_load_ap_pass()`，显示在设备屏幕上）。原先密码
 128 位 UUID **刻意不放进广播包**：31 字节的广播包装不下 flags、设备名和一个
 128 位 UUID，硬塞会让 `ble_gap_adv_set_fields()` 返回 `EMSGSIZE`。
 
-可用命令：`help`、`status`（时间/网络/蓝牙/内存/各任务栈余/LVGL 池用量与事件显示序）、
+可用命令：`help`、`status`（时间/网络/蓝牙/当前屏与页码/内存/各任务栈余/LVGL 池用量与事件显示序）、
 `wifi …`、`ap`（热点状态、`ap on`、`ap off`）、`time <Unix 秒>`
 对时、`ble on` / `ble off`；另有**只能走 USB** 的 `shot`（见 [serial-screenshot.zh_CN.md](serial-screenshot.zh_CN.md)）、
 `key`（注入一次按键）、`sleep`（触发浅/深睡，用于核对空闲行为）与 `debug on`。

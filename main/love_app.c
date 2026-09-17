@@ -1679,6 +1679,40 @@ bool love_app_screen_off(void)
     return s_screen_off;
 }
 
+// 当前屏/页,给串口 status 用。上/下 翻到哪一页只存在内存里,而截图每次都要重开串口
+// (复位芯片、状态清零),验不了连续翻页 —— 有这一行就能在旁边敲 key down 一步步看。
+// s_view / s_page_* / s_cfg 都在 LVGL 锁内读写,所以这里取锁后再读。
+void love_app_view_text(char *out, size_t size)
+{
+    if (!out || size == 0) return;
+    out[0] = '\0';
+    if (!bsp_lvgl_lock(200)) {
+        snprintf(out, size, "读不到(界面锁被占)");
+        return;
+    }
+
+    const int total = page_total();
+    const int slot = current_slot();
+    if (s_view == VIEW_MAIN) {
+        snprintf(out, size, "主页(轮播共 %d 页)", total);
+    } else if (s_view == VIEW_SETTINGS) {
+        snprintf(out, size, "设置页");
+    } else if (s_view == VIEW_STATUS) {
+        snprintf(out, size, "本机状态页");
+    } else if (s_view == VIEW_CONFIRM) {
+        snprintf(out, size, "蓝牙确认页");
+    } else if (s_view == VIEW_LIST) {
+        snprintf(out, size, "列表页(列表组第 %d/%d 页,轮播第 %d/%d 页)", s_list_page + 1,
+                 love_view_list_pages(s_list_count, LIST_PAGE_ROWS), slot + 1, total);
+    } else if (s_view > VIEW_MAIN && s_view - 1 < (int)s_cfg.event_count) {
+        snprintf(out, size, "单页卡「%s」(轮播第 %d/%d 页)", s_cfg.events[s_view - 1].name,
+                 slot + 1, total);
+    } else {
+        snprintf(out, size, "?(s_view=%d)", s_view);
+    }
+    bsp_lvgl_unlock();
+}
+
 uint32_t love_app_idle_seconds(void)
 {
     const int64_t idle_us = input_idle_us();

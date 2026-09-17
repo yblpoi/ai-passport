@@ -327,7 +327,7 @@ static void print_stack_headroom(void)
 }
 
 // 两组显示序。设备屏幕上看不出"为什么是这个顺序",改完分类或网页上的顺序后
-// 敲 status 就能核对分组与组内排序 —— 列表分页、光标与单页翻卡都建在这两个顺序上,
+// 敲 status 就能核对分组与组内排序 —— 轮播上"哪几页、每页哪几条"就建在这两个顺序上,
 // 顺序错了整屏都是错的。
 static void print_event_order(void)
 {
@@ -419,6 +419,11 @@ static int cmd_status(void *ctx, int argc, char **argv)
     // 熄屏状态只体现在背光上,从截图看不出来(截图读的是帧缓冲)。摆出来才验得了
     // "熄屏后按任意键只亮屏、不执行动作"这条行为。
     love_console_out("屏幕  %s\n", love_app_screen_off() ? "已熄屏" : "亮");
+    // 停在哪一页同样是截图看不全的东西:截图每次都要重开串口(复位芯片),而翻页是
+    // 内存里的状态。要验"上/下 一下翻一页、到两头回主页",就敲 key down / status 交替看。
+    char view[120];
+    love_app_view_text(view, sizeof(view));
+    love_console_out("界面  %s\n", view);
     // "它为什么不睡"必须能被读出来,而不是靠猜:自动深睡要同时满足按键、网页、蓝牙
     // 三道闸门,而且熄屏档位设成"常亮"时按设计根本不睡。这里把四个数一起摆出来
     // (最容易被忽略的是手机后台页还在每 10 秒轮询,以及档位是常亮)。

@@ -126,8 +126,9 @@ The 128-bit UUID is deliberately kept out of the advertising packet: the 31-byte
 packet cannot hold the flags, the device name and a 128-bit UUID, and
 `ble_gap_adv_set_fields()` returns `EMSGSIZE` when it does not fit.
 
-Available commands: `help`, `status` (time, network, Bluetooth, memory, the task
-stack watermarks, the LVGL pool and the event order), `wifi …`,
+Available commands: `help`, `status` (time, network, Bluetooth, the screen you are
+on and its page number, memory, the task stack watermarks, the LVGL pool and the
+event order), `wifi …`,
 `ap` (hotspot state, `ap on`, `ap off`),
 `time <unix seconds>` to set the clock, `ble on` / `ble off`,
 and the **USB-only** `shot` (see [serial-screenshot.md](serial-screenshot.md)),

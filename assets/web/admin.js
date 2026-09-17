@@ -637,6 +637,12 @@ function renderTimeAndNet(state){
   // 热点空闲关闭后(默认 5 分钟无操作)只能从同一局域网访问,所以两个地址都要给。
   byId("netLanUrl").textContent = net.lanUrl || "未联网";
   byId("apInfo").textContent = net.ap ? `${net.apSsid} / 密码 ${net.apPass}` : "已关闭";
+  // 手动关掉的热点不会再自动打开（联网失败时也不会兜底打开），所以要跟"空闲关掉"
+  // 区分开：前者是用户决定的，后者一会儿还会自己回来。
+  byId("apHint").textContent = net.ap
+    ? "5 分钟无操作后自动关闭。"
+    : (net.apManualOff ? "已手动关闭，不会再自动打开（联网失败也不会兜底打开）。点“开热点”可以恢复。"
+                       : "当前未开启；未配网时开机自动打开，配了网但连不上时也会兜底打开。");
   byId("deviceName").textContent = state.deviceName;
 }
 
@@ -729,7 +735,7 @@ byId("apOn").onclick = async () => {
 };
 byId("apOff").onclick = async () => {
   try{ await api("/api/ap", {method:"POST", body: JSON.stringify({on:false})});
-       toast("热点已关闭"); setTimeout(()=>load().catch(()=>{}), 1200);
+       toast("热点已关闭，不会再自动打开"); setTimeout(()=>load().catch(()=>{}), 1200);
   }catch(e){ toast("操作失败：" + e.message); }
 };
 byId("pvMain").onclick = () => showPreviewView("main");

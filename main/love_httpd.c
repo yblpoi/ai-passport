@@ -241,6 +241,8 @@ static cJSON *state_to_json(void)
                                              (net.state == LOVE_NET_CONNECTING ? "connecting" : "idle"));
     cJSON_AddStringToObject(net_json, "stateText", love_net_state_text(net.state));
     cJSON_AddBoolToObject(net_json, "ap", net.ap_active);
+    // 手动关掉的热点不会自己回来(见 love_net.h),页面要把这件事说清楚。
+    cJSON_AddBoolToObject(net_json, "apManualOff", net.ap_manual_off);
     cJSON_AddStringToObject(net_json, "ip", net.ip);
     cJSON_AddNumberToObject(net_json, "rssi", net.rssi);
     cJSON_AddStringToObject(net_json, "ssid", net.sta_ssid);

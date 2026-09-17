@@ -5,8 +5,8 @@
 // stdout,BLE 侧一个字也看不到。
 //
 // 密码处理:命令只在终端里回显一次(本地配置不可避免),但**绝不写进日志、也不回读**。
-// love_net_status_t 里唯一带密码的是 ap_pass,那是热点密码(由 MAC 派生、本来就印在
-// 设备屏幕上),用户配置的那个密码只有写入路径、没有读出接口。
+// love_net_status_t 里唯一带密码的是 ap_pass,那是热点密码(每台随机生成一次、存 NVS,
+// 本来就印在设备屏幕上),用户配置的那个密码只有写入路径、没有读出接口。
 #include "love_console.h"
 
 #include "love_app.h"
@@ -75,8 +75,17 @@ static void print_wifi_status(void)
 
     if (net.has_credentials) {
         love_console_out("已配置 Wi-Fi: %s\n", net.sta_ssid);
-    } else {
+    } else if (net.ap_active) {
         love_console_out("尚未配置 Wi-Fi。热点 %s 已开启,密码见设备屏幕。\n", net.ap_ssid);
+    } else {
+        love_console_out("尚未配置 Wi-Fi,热点也是关闭的。\n");
+    }
+
+    // 手动关掉的热点不会自己回来(见 love_net.h):这个状态必须说清楚,否则用户会一直
+    // 等它自动打开 —— 那正是这次改动之前的行为。怎么开回来统一由 ap 命令回答,别在这
+    // 两处各写一遍。
+    if (!net.ap_active && net.ap_manual_off) {
+        love_console_out("热点为手动关闭,不会再自动打开(ap on 可打开)。\n");
     }
 
     const char *site = net.site_url[0] ? net.site_url
@@ -84,6 +93,36 @@ static void print_wifi_status(void)
     love_console_out("后台网页: %s\n", site ? site : "暂不可达");
 }
 
+// 热点是屏幕上那个开关、后台页那两个按钮之外的第三条入口:只有 USB 或蓝牙串口
+// 在手边时(比如热点被手动关掉、局域网也进不去),它就是唯一能把热点开回来的地方。
+static int cmd_ap(void *ctx, int argc, char **argv)
+{
+    if (argc == 1 || strcmp(argv[1], "status") == 0) {
+        love_net_status_t net;
+        love_net_get_status(&net);
+        love_console_out("热点: %s%s\n", net.ap_active ? "已打开" : "已关闭",
+                         (!net.ap_active && net.ap_manual_off) ? "(手动关闭,不会再自动打开)" : "");
+        return 0;
+    }
+
+    bool on;
+    if (strcmp(argv[1], "on") == 0) {
+        on = true;
+    } else if (strcmp(argv[1], "off") == 0) {
+        on = false;
+    } else {
+        love_console_out("用法: ap / ap on / ap off\n");
+        return 1;
+    }
+
+    esp_err_t err = on ? love_net_ap_start() : love_net_ap_stop();
+    if (err != ESP_OK) {
+        love_console_out("热点%s失败: %s。\n", on ? "打开" : "关闭", esp_err_to_name(err));
+        return 1;
+    }
+    love_console_out(on ? "热点已打开。\n" : "热点已关闭,之后不会再自动打开。\n");
+    return 0;
+}
 static int cmd_wifi(void *ctx, int argc, char **argv)
 {
     (void)ctx;
@@ -375,6 +414,7 @@ typedef struct {
 
 static const love_command_t COMMANDS[] = {
     { "wifi",   "配置 Wi-Fi:wifi / wifi <名称> <密码> / wifi open <名称> / wifi clear", cmd_wifi },
+    { "ap",     "后台热点:ap(看状态)/ ap on / ap off(关掉后不再自动开)", cmd_ap },
     { "ble",    "蓝牙串口:ble(看状态)/ ble on / ble off", cmd_ble },
     { "time",   "对时:time 看当前时间,time <Unix 秒> 写入", cmd_time },
     { "status", "时间、网络、蓝牙、内存与事件列表序", cmd_status },

@@ -1307,7 +1307,9 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         love_net_get_status(&net);
         esp_err_t err = net.ap_active ? love_net_ap_stop() : love_net_ap_start();
         if (bsp_lvgl_lock(300)) {
-            set_note(err == ESP_OK ? (net.ap_active ? "热点已关闭" : "热点已打开")
+            // 关掉之后就不再自动开(见 love_net.h),这一点必须写在提示里 ——
+            // 否则用户会一直等它自己回来,而它不会了。
+            set_note(err == ESP_OK ? (net.ap_active ? "热点已关闭(不再自动开)" : "热点已打开")
                                    : "热点操作失败");
             render();
             bsp_lvgl_unlock();

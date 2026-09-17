@@ -40,6 +40,17 @@ esp_err_t love_store_load_wifi(char *ssid, size_t ssid_size,
 esp_err_t love_store_save_wifi(const char *ssid, const char *pass);
 esp_err_t love_store_clear_wifi(void);
 
+// "用户手动关掉了后台热点"这一意图位。设备必须尊重它:手动关掉之后,即使联网失败
+// 也不再自动把热点开回来(见 love_net_poll)。用独立的 NVS 键而不是塞进 love_config_t,
+// 是为了不动配置记录的布局 —— 改那个结构要连带升版本号与写迁移,风险大得多。
+esp_err_t love_store_save_ap_off(bool off);
+bool love_store_load_ap_off(void);   // 没写过时返回 false(默认允许自动开热点)
+
+// 热点密码。**每台随机生成一次后持久化**:原先由 MAC 推导(SSID 后两字节 -> 密码),
+// 于是任何能看到 SSID 的人都能算出密码,再进没有任何鉴权的后台页。密码只在设备屏幕上
+// 显示给主人看,不走这条推导。首次(含老固件升上来)生成并落盘。
+// 返回 ESP_OK 表示 out 里是可用的密码。
+esp_err_t love_store_load_ap_pass(char *out, size_t size);
 // 最后一次成功对时(UTC 秒 + 来源)。
 esp_err_t love_store_save_time(uint64_t epoch_seconds, love_time_src_t src);
 bool love_store_load_time(uint64_t *epoch_seconds, love_time_src_t *src);

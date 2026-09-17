@@ -3,6 +3,10 @@
 // 设备按需开热点:从未配网时开机即开(否则没法进后台),已配网时由后台或设置页
 // 主动打开,并有空闲自动关闭。联网成功进入 STA 模式并启动 SNTP 对时;
 // AP 与 STA 用 APSTA 共存,手机连着热点也能同时让设备上网。
+//
+// 有一条例外贯穿全篇:**用户手动关掉热点之后,设备不再自动把热点开回来**。
+// 开机自动开与联网失败兜底这两条自动路径都会让路,直到用户手动开一次(或清除凭据)。
+// 闸的状态记在 ap_manual_off 里,并存 NVS,重启与深睡醒来都还算数。
 #pragma once
 
 #include "esp_err.h"
@@ -24,6 +28,9 @@ typedef enum {
 typedef struct {
     love_net_state_t state;
     bool ap_active;
+    // 用户手动关掉过热点的闸:为真表示"别自动开热点"。界面据此把"热点已关闭"
+    // 讲清楚,不然用户分不清"一会儿就会自己回来"和"关掉了就不会自己回来"。
+    bool ap_manual_off;
     bool has_credentials;
     char ip[16];
     int rssi;
@@ -44,6 +51,8 @@ esp_err_t love_net_init(void);
 void love_net_deinit(void);
 
 // 热点开关。开热点时自动进入 APSTA;关热点且无凭据时回到 IDLE。
+// 手动关会记下"用户不要热点"这一意图(写 NVS),此后开机自动开热点与联网失败兜底
+// 都不再触发;手动开(或 love_net_forget)把它撤销。空闲超时那次自动关不算手动关。
 esp_err_t love_net_ap_start(void);
 esp_err_t love_net_ap_stop(void);
 

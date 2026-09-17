@@ -67,7 +67,7 @@ last two share one command set. None of them replaces another.
 | --- | --- | --- |
 | USB serial console | `wifi <ssid> <password>` | `main/love_console.c`, on the USB-Serial-JTAG console. The only entry that works when the device is not reachable on any network, which is exactly the state a misconfigured device is in. |
 | Bluetooth serial console | `wifi <ssid> <password>` in a BLE serial app | `main/love_ble.c` advertises a standard Nordic UART Service, so off-the-shelf apps work. The command set is identical to the USB console. Off by default. |
-| Admin web page | Network and hotspot card | `main/love_httpd.c`, served over the device's own hotspot. That hotspot only opens while the device has no saved credentials. |
+| Admin web page | Network and hotspot card | `main/love_httpd.c`, served over the device's own hotspot or over the LAN address. Reaching it needs one of those two; see [Hotspot lifecycle](#hotspot-lifecycle). |
 
 All credential paths converge on `love_net_set_credentials()` and
 `love_net_forget()` in `main/love_net.c`, so there is one credential path and one
@@ -79,6 +79,35 @@ The console never logs the password and never reads it back: `love_store_load_wi
 is the only reader and the network layer is the only caller. The console parser
 splits arguments on spaces, so an SSID or password containing a space has to be
 entered from the web page instead.
+
+### Hotspot lifecycle
+
+The hotspot is `LoveCount-XXXX`; its SSID is derived from the same MAC and its password
+is **generated randomly on first boot and stored in NVS** (`love_store_load_ap_pass()`,
+shown on the device screen). It used to be derived from the MAC as well, which meant
+anyone who could see the SSID could compute the password and then reach the admin page,
+which has no authentication of its own. It opens automatically in exactly two situations:
+
+| Trigger | Condition | Code |
+| --- | --- | --- |
+| Boot | The device has no saved credentials | `love_net_init()` |
+| Station-down fallback | Credentials exist but the station has not been connected for 60 s | `love_net_poll()` |
+
+It also opens on demand from the device settings page, the network card of the
+admin page, or the `ap on` console command. While it is open and the station is
+connected it closes itself after **five minutes without activity** (every admin
+page request and every button press on the device counts); that automatic close
+deliberately does **not** count as a manual close, so the fallback above still
+works later.
+
+Closing it from the device, from the web page or with `ap off` sets a
+*manual-off* latch, persisted in the `ap_off` key of the same NVS namespace.
+While the latch is set, both automatic paths are skipped: the hotspot does not
+come back behind the user's back, not even after a reboot or a deep-sleep wake.
+`ap on` and `wifi clear` clear the latch — `wifi clear` does so because removing
+the credentials has to leave a provisioning entry point. With the latch set and
+the station down, the ways back onto the network are the device settings page and
+the two serial consoles.
 
 ### Bluetooth serial console
 

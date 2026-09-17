@@ -5,6 +5,7 @@
 
 #include "love_pixel_art.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -17,6 +18,8 @@ static const char *TAG = "love_store";
 #define KEY_CONFIG "cfg"
 #define KEY_WIFI_SSID "wifi_ssid"
 #define KEY_WIFI_PASS "wifi_pass"
+#define KEY_AP_OFF "ap_off"
+#define KEY_AP_PASS "ap_pass"
 #define KEY_TIME "time"
 #define KEY_DAYS_CACHE "days"
 #define KEY_AVATAR_PREFIX "av"    // NVS key 上限 15 字节:av0..av3
@@ -237,6 +240,69 @@ esp_err_t love_store_clear_wifi(void)
     return err;
 }
 
+esp_err_t love_store_save_ap_off(bool off)
+{
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_u8(handle, KEY_AP_OFF, off ? 1 : 0);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    return err;
+}
+
+bool love_store_load_ap_off(void)
+{
+    if (!s_ready) return false;
+
+    nvs_handle_t handle;
+    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
+
+    // 键不存在(老固件升上来)与写坏都是同一个意思:没有"手动关过"的意图。
+    uint8_t value = 0;
+    esp_err_t err = nvs_get_u8(handle, KEY_AP_OFF, &value);
+    nvs_close(handle);
+    return err == ESP_OK && value != 0;
+}
+
+esp_err_t love_store_load_ap_pass(char *out, size_t size)
+{
+    if (!out || size < 9) return ESP_ERR_INVALID_ARG;   // 最短 8 字符 + NUL
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    size_t len = size;
+    err = nvs_get_str(handle, KEY_AP_PASS, out, &len);
+    if (err == ESP_OK && out[0] != '\0') {
+        nvs_close(handle);
+        return ESP_OK;   // 老设备:沿用已经生成过的
+    }
+
+    // 首次(或键丢了):生成一个新的并落盘。字母表去掉了容易看错的 0/o/1/l/I,
+    // 因为主人要从屏幕上把它念到手机里。
+    static const char ALPHABET[] = "abcdefghjkmnpqrstuvwxyz23456789";
+    char generated[9];
+    for (size_t i = 0; i + 1 < sizeof(generated); i++) {
+        generated[i] = ALPHABET[esp_random() % (sizeof(ALPHABET) - 1)];
+    }
+    generated[sizeof(generated) - 1] = '\0';
+
+    err = nvs_set_str(handle, KEY_AP_PASS, generated);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "热点密码落盘失败: %s", esp_err_to_name(err));
+        return err;
+    }
+    snprintf(out, size, "%s", generated);
+    return ESP_OK;
+}
 esp_err_t love_store_save_time(uint64_t epoch_seconds, love_time_src_t src)
 {
     if (!s_ready) return ESP_ERR_INVALID_STATE;

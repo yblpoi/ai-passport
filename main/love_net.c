@@ -31,6 +31,10 @@ static bool s_inited;
 static bool s_wifi_inited;
 static bool s_wifi_started;
 static bool s_ap_requested;
+// 用户手动关掉过热点的闸。开着它时,任何"自动开热点"的路径都要让路:
+// 开机自动开(见 love_net_init)与联网失败兜底(见 love_net_poll)。
+// 只有"手动开热点"和"清除凭据"能把它放下,并且会写回 NVS(重启后仍然不自动开)。
+static bool s_ap_manual_off;
 static love_net_state_t s_state = LOVE_NET_OFF;
 static char s_ip[16];
 static int s_rssi = -127;
@@ -44,6 +48,7 @@ static TickType_t s_ap_deadline;
 static TickType_t s_sta_down_since;   // 0 = 当前是连着的(或未配网)
 
 // 有凭据却连不上时,过这么久就自动把热点开起来兜底(见 love_net_poll)。
+// 用户手动关过热点(s_ap_manual_off)时这条兜底不生效。
 #define AP_FALLBACK_AFTER_MS 60000
 
 static void lock(void)
@@ -56,13 +61,24 @@ static void unlock(void)
     if (s_lock) xSemaphoreGive(s_lock);
 }
 
-// 热点 SSID/密码由 MAC 派生,避免所有设备都是同一个名字;密码显示在设备屏幕上。
+// 热点 SSID 由 MAC 派生,避免所有设备都是同一个名字;密码则由 love_store **每台随机
+// 生成一次并持久化**(见 love_store_load_ap_pass 的说明):SSID 是公开的,密码不能由
+// 它推导出来 —— 否则任何看到 SSID 的人都能算出密码,再进没有任何鉴权的后台页。
+// 密码显示在设备屏幕上,只有物理接触的人看得到。
+static char s_ap_pass[9];   // 初始化时读/生成一次,之后只读缓存
+
 static void build_ap_identity(char *ssid, size_t ssid_size, char *pass, size_t pass_size)
 {
     uint8_t mac[6] = { 0 };
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
     snprintf(ssid, ssid_size, "%s-%02X%02X", AP_SSID_PREFIX, mac[4], mac[5]);
-    snprintf(pass, pass_size, "love%02x%02x", mac[4], mac[5]);
+    // 读不到 NVS(首次初始化失败等)时退回按 MAC 派生:宁可密码可推导,也不留一个空密码
+    // 的空热点。s_ap_pass 为空只可能是这一种情况。
+    if (s_ap_pass[0] != '\0') {
+        snprintf(pass, pass_size, "%s", s_ap_pass);
+    } else {
+        snprintf(pass, pass_size, "love%02x%02x", mac[4], mac[5]);
+    }
 }
 
 static void apply_mode(void)
@@ -267,16 +283,28 @@ esp_err_t love_net_init(void)
     // "error in send : 11"(EAGAIN)并中断响应。设备是常电桌面摆件,省这点电不值当。
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
+    // 热点密码:每台随机生成一次并落盘,必须在 start_ap_profile() 之前读好
+    // (老设备这里会顺手生成 + 写入,所以它的密码会从 MAC 推导值变成随机值)。
+    if (love_store_load_ap_pass(s_ap_pass, sizeof(s_ap_pass)) != ESP_OK) {
+        ESP_LOGW(TAG, "读取热点密码失败,本次按 MAC 派生");
+        s_ap_pass[0] = '\0';
+    }
+
     start_ap_profile();
 
     char pass[LOVE_WIFI_PASS_MAX] = { 0 };
     bool has_creds = love_store_load_wifi(s_sta_ssid, sizeof(s_sta_ssid),
                                           pass, sizeof(pass)) == ESP_OK &&
                      s_sta_ssid[0] != '\0';
+    // 先把"用户手动关过热点"这一意图读回来:它决定下面要不要自动开热点,
+    // 也决定联网失败时还要不要兜底(见 love_net_poll)。
+    s_ap_manual_off = love_store_load_ap_off();
     if (!has_creds) {
         s_sta_ssid[0] = '\0';
         // 没配过网:开机就开热点,否则用户没有任何入口进后台。
-        s_ap_requested = true;
+        // 例外是用户上次在设置页手动把它关了 —— 那是明确的意图,不再自动开;
+        // 想找回来后仍旧是设置页那一个按钮(见 love_app.c 的 ACT_AP_TOGGLE)。
+        s_ap_requested = !s_ap_manual_off;
     }
     love_net_ap_touch();
 
@@ -331,6 +359,13 @@ void love_net_deinit(void)
 esp_err_t love_net_ap_start(void)
 {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
+
+    // 手动打开 = 撤销那道闸,并写回 NVS:用户要热点这件事重启后也成立。
+    // 只在闸真的关着时写,免得每次启动流程(wifi clear 也走这里)都动一次 NVS。
+    if (s_ap_manual_off) {
+        s_ap_manual_off = false;
+        (void)love_store_save_ap_off(false);
+    }
     s_ap_requested = true;
     love_net_ap_touch();
     apply_mode();
@@ -340,7 +375,17 @@ esp_err_t love_net_ap_start(void)
 esp_err_t love_net_ap_stop(void)
 {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
+
     s_ap_requested = false;
+    // 记下"这一下是用户手动关的":两个自动开热点的路径都要让路,否则联网失败满
+    // 60 秒热点又自己回来了(这正是用户报的现象)。写回 NVS,重启/深睡醒来也不再自动开。
+    //
+    // 空闲超时那次自动关(s_state 已联网、超 AP_DEFAULT_TIMEOUT_S)**不设**这道闸 ——
+    // 那是设备自己的省电行为,之后联网再失败时仍然需要兜底入口。
+    if (!s_ap_manual_off) {
+        s_ap_manual_off = true;
+        (void)love_store_save_ap_off(true);
+    }
     apply_mode();
     return ESP_OK;
 }
@@ -373,7 +418,9 @@ esp_err_t love_net_forget(void)
     s_state = LOVE_NET_IDLE;
     if (s_wifi_started) esp_wifi_disconnect();
 
-    // 清除凭据后必须留下配网入口。
+    // 清除凭据后必须留下配网入口。走 love_net_ap_start() 而不是自己置位:
+    // 它同时会撤销"用户手动关过热点"的闸 —— 清凭据本身就是一次"我要重新配网"的
+    // 明确意图,这时候再挡着不开热点,用户就真的没有入口了。
     return love_net_ap_start();
 }
 
@@ -397,6 +444,7 @@ void love_net_get_status(love_net_status_t *out)
     lock();
     out->state = s_state;
     out->ap_active = s_ap_requested;
+    out->ap_manual_off = s_ap_manual_off;
     snprintf(out->ip, sizeof(out->ip), "%s", s_ip);
     out->rssi = s_rssi;
     snprintf(out->sta_ssid, sizeof(out->sta_ssid), "%s", s_sta_ssid);
@@ -462,10 +510,13 @@ void love_net_poll(void)
     // 联网失败兜底:配过网却连不上时,自动把热点开起来当入口。
     // 不这样做的话那种状态是"两头进不去"——配过网的设备开机不开热点(见 love_net_init),
     // 局域网地址又不存在,用户只剩 USB 一条路。实测遇到过:手机热点一关,后台就再也进不去。
+    //
+    // 唯一的例外是用户手动关过热点(!s_ap_manual_off 为假):那说明"进不去"是他自己选的,
+    // 再自动开回来就是噪音。这时兜底的计时照常累加 —— 一旦用户手动开一次热点,闸就撤销了。
     if (s_sta_ssid[0] != '\0' && s_state != LOVE_NET_CONNECTED) {
         if (s_sta_down_since == 0) {
             s_sta_down_since = xTaskGetTickCount();
-        } else if (!s_ap_requested &&
+        } else if (!s_ap_requested && !s_ap_manual_off &&
                    (xTaskGetTickCount() - s_sta_down_since) >
                        pdMS_TO_TICKS(AP_FALLBACK_AFTER_MS)) {
             ESP_LOGW(TAG, "联网失败超过 %d 秒,自动打开热点作为入口",
@@ -478,7 +529,8 @@ void love_net_poll(void)
     }
 
     if (!s_ap_requested) return;
-    if (s_sta_ssid[0] == '\0') return;   // 未配网时必须保留热点入口
+    // 未配网时热点是唯一入口,不按空闲超时关它(手动关是允许的,见上面的闸)。
+    if (s_sta_ssid[0] == '\0') return;
 
     // 联不上网时热点是唯一入口,不按空闲关闭;连上之后让它正常计时关闭。
     if (s_state != LOVE_NET_CONNECTED) {

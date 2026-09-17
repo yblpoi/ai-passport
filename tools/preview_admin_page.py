@@ -57,6 +57,7 @@ MOCK_STATE = {
         "state": "connected",
         "stateText": "已联网",
         "ap": True,
+        "apManualOff": False,
         "ip": "192.168.1.23",
         "rssi": -52,
         "ssid": "home-2.4g",
@@ -168,6 +169,18 @@ class Handler(BaseHTTPRequestHandler):
                 if len(payload) != 800:
                     return self._error(400, "头像数据必须是 800 字节的 4bpp 数据")
                 MOCK_STATE["avatars"][slot] = base64.b64encode(payload).decode("ascii")
+
+        # 热点开关:真机的 /api/ap 会改设备状态并把新状态回给网页。这里照做,
+        # 否则"关热点 → 提示文案变成手动关闭"这条分支在本地根本走不到。
+        if path == "/api/ap":
+            try:
+                incoming = json.loads(payload.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return self._error(400, "请求体不是合法 JSON")
+            on = bool(incoming.get("on")) if isinstance(incoming, dict) else False
+            MOCK_STATE["net"]["ap"] = on
+            MOCK_STATE["net"]["apManualOff"] = not on
+            MOCK_STATE["net"]["url"] = "http://192.168.4.1" if on else ""
 
         body = json.dumps(MOCK_STATE, ensure_ascii=False).encode("utf-8")
         self._send(200, body, "application/json; charset=utf-8")

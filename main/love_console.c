@@ -12,6 +12,7 @@
 #include "love_net.h"
 
 #include "esp_console.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 #include <stdio.h>
@@ -84,12 +85,18 @@ static int cmd_wifi(int argc, char **argv)
 esp_err_t love_console_start(void)
 {
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    // 不存历史:历史要挂文件系统(这里没有),也避免命令行(含密码)落到磁盘上。
-    repl_config.max_history_len = 0;
+    // 历史只留在 RAM:history_save_path 保持 NULL(默认值),显式写出来是因为它是一条
+    // 安全约束——敲过的命令行里有 Wi-Fi 密码,不能落到文件上。
     repl_config.history_save_path = NULL;
+    // 但**不能设成 0**:linenoiseHistorySetMaxLen() 拒绝 <1,会让
+    // esp_console_new_repl_usb_serial_jtag() 直接返回 ESP_FAIL(整条入口起不来,
+    // 而且驱动缓冲已经分配过、白扔掉几 KB)。1 = 只保留最近一条,够用又留得最少。
+    repl_config.max_history_len = 1;
     repl_config.prompt = "> ";
     // 最长的合法命令行是「wifi <32 字节 SSID> <64 字节密码>」,128 足够。
     repl_config.max_cmdline_length = 128;
+    // 单位是字节(IDF 的 xTaskCreate 栈深与 vanilla FreeRTOS 不同),4KB 与 love_time
+    // 的工作任务一致;控制台任务本身只做行编辑与命令派发。
     repl_config.task_stack_size = 4096;
     repl_config.task_priority = 3;
 
@@ -99,7 +106,11 @@ esp_err_t love_console_start(void)
     esp_console_repl_t *repl = NULL;
     esp_err_t err = esp_console_new_repl_usb_serial_jtag(&dev_config, &repl_config, &repl);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "创建串口控制台失败: %s", esp_err_to_name(err));
+        // 带上堆状况:这个失败几乎总是任务栈拿不到一块连续内存,只看错误码看不出原因。
+        ESP_LOGE(TAG, "创建串口控制台失败: %s(堆余 %u,最大连续块 %u)",
+                 esp_err_to_name(err),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         return err;
     }
 

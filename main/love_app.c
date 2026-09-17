@@ -1184,6 +1184,14 @@ esp_err_t love_app_start(void)
         if (love_store_init() != ESP_OK) return ESP_FAIL;
         s_store_ready = true;
     }
+    // 串口配网:插着 USB 时不用连热点也能配网。必须在 Wi-Fi/BLE 之前启动 ——
+    // 它要一块连续的 4KB 任务栈,排在后面时堆已被 NimBLE 和 Wi-Fi 切碎,实测
+    // xTaskCreatePinnedToCore 直接失败(控制台建不起来,还白扔掉驱动缓冲)。
+    // 失败只少一条入口,不影响其它功能。
+    if (love_console_start() != ESP_OK) {
+        ESP_LOGW(TAG, "USB 串口控制台启动失败,仍可用后台网页或 BLE 配网");
+    }
+
     love_time_init();
     (void)love_time_add_listener(on_time_changed, NULL);
     love_httpd_set_changed_cb(on_config_changed);
@@ -1196,10 +1204,6 @@ esp_err_t love_app_start(void)
     }
     if (love_ble_start() != ESP_OK) {
         ESP_LOGW(TAG, "BLE 对时服务启动失败");
-    }
-    // 串口配网:插着 USB 时不用连热点也能配网。失败只少一条入口,不影响其它功能。
-    if (love_console_start() != ESP_OK) {
-        ESP_LOGW(TAG, "USB 串口控制台启动失败,仍可用后台网页或 BLE 配网");
     }
 
     // 最大连续块和剩余总量一样重要:Wi-Fi 驱动发一帧要一块 ~1600 字节的连续内存,

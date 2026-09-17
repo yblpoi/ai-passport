@@ -60,6 +60,7 @@ MOCK_STATE = {
         "apSsid": "LoveCount-A1B2",
         "apPass": "lovea1b2",
         "url": "http://192.168.4.1",
+        "lanUrl": "http://10.255.234.34",
         "hasCredentials": True,
     },
     "icons": list(range(16)),
@@ -91,11 +92,16 @@ def _render_pages() -> tuple[bytes, bytes, bytes]:
 
 PAGE, CSS, JS = _render_pages()
 
-# 与设备端 love_httpd.c 的静态资源路由一一对应。
+# 与设备端 love_httpd.c 的静态资源路由一一对应。页面图标在设备端是 heart 那颗,
+# 浏览器会自己去要 /favicon.ico 和 /apple-touch-icon*.png,这里一并接住。
+_PAGE_ICON = next(i for i in ASSETS_JSON["icons"] if i["id"] == "heart")
 STATIC = {
     "/admin.css": (CSS, "text/css; charset=utf-8"),
     "/admin.js": (JS, "application/javascript; charset=utf-8"),
     "/bg.png": (_decode_png(ASSETS_JSON["bgTile"]), "image/png"),
+    "/favicon.ico": (_decode_png(_PAGE_ICON["data"]), "image/png"),
+    "/apple-touch-icon.png": (_decode_png(_PAGE_ICON["data"]), "image/png"),
+    "/apple-touch-icon-precomposed.png": (_decode_png(_PAGE_ICON["data"]), "image/png"),
 }
 
 

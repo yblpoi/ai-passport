@@ -4,8 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>恋爱倒计时 · 后台</title>
-<!-- 样式、脚本、底纹是独立小资源,不内联。图标的 data URI 内联在 admin.js 里,
-     页面图标也由脚本注入 —— 十几条 /icon/N.png 会多开一堆连接,不值得。 -->
+<!-- 样式、脚本、底纹是独立小资源,不内联。图标的 data URI 内联在 admin.js 里 ——
+     十几条 /icon/N.png 会多开一堆连接,不值得。
+     页面图标必须在 HTML 里声明:浏览器会自己去找 /favicon.ico 和
+     /apple-touch-icon*.png,那两个路径只能靠路由应答,不像 data URI 能内联。 -->
+<link rel="icon" href="/favicon.ico">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/admin.css">
 <script src="/admin.js" defer></script>
 </head>
@@ -108,7 +112,8 @@
     <div class="kv"><span>网络状态</span><b><span class="pill" id="netPill">--</span></b></div>
     <div class="kv"><span>IP 地址</span><b id="netIp">--</b></div>
     <div class="kv"><span>已配置 Wi-Fi</span><b id="netSsid">--</b></div>
-    <div class="kv"><span>后台地址</span><b id="netUrl">--</b></div>
+    <div class="kv"><span>热点地址</span><b id="netUrl">--</b></div>
+    <div class="kv"><span>局域网地址</span><b id="netLanUrl">--</b></div>
     <div class="kv"><span>热点</span><b id="apInfo">--</b></div>
     <div class="row" style="margin-top:12px">
       <button type="button" class="ghost" id="scanBtn">扫描附近 Wi-Fi</button>
@@ -124,7 +129,8 @@
       <button type="button" class="primary" id="wifiSave">保存并连接</button>
       <button type="button" class="ghost" id="wifiClear">清除凭据</button>
     </div>
-    <p class="muted">清除凭据后设备会重新打开热点，便于重新配置。热点默认开启 5 分钟无操作后自动关闭。</p>
+    <p class="muted">清除凭据后设备会重新打开热点，便于重新配置。热点默认开启 5 分钟无操作后自动关闭。
+      局域网地址由路由器 DHCP 分配，随时可能变化；这里显示的是设备当前实际持有的地址。</p>
   </div>
 
   <div class="card">

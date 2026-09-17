@@ -8,18 +8,8 @@ const AVA = 40;                       // 与设备端 LOVE_ICON_PX 一致
 const AVATAR_BYTES = AVA * AVA / 2;   // 40x40 4bpp = 800 字节
 const AVATAR_MAX = 4;
 const TRANSPARENT_PX = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-// 页面图标直接复用内联的爱心素材,免得浏览器再为 /favicon.ico 开一条连接。
-// 下标 6 = 爱心,与 assets/images/web/assets.json 里 icons 的顺序一致。
-const FAVICON_INDEX = 6;
 
 const byId = (id) => document.getElementById(id);
-
-{
-  const link = document.createElement("link");
-  link.rel = "icon";
-  link.href = ICONS[FAVICON_INDEX].data;
-  document.head.appendChild(link);
-}
 
 // 设备回传的自定义头像(4bpp base64,每个槽位一个,空串表示没上传)
 let AVATARS = new Array(AVATAR_MAX).fill("");
@@ -515,7 +505,9 @@ function renderTimeAndNet(state){
   np.className = "pill " + (net.state === "connected" ? "ok" : (net.ap ? "warn" : ""));
   byId("netIp").textContent = net.ip || "—";
   byId("netSsid").textContent = net.ssid || "尚未配置";
-  byId("netUrl").textContent = net.url;
+  byId("netUrl").textContent = net.url || "热点已关闭";
+  // 热点空闲关闭后(默认 5 分钟无操作)只能从同一局域网访问,所以两个地址都要给。
+  byId("netLanUrl").textContent = net.lanUrl || "未联网";
   byId("apInfo").textContent = net.ap ? `${net.apSsid} / 密码 ${net.apPass}` : "已关闭";
   byId("deviceName").textContent = state.deviceName;
 }

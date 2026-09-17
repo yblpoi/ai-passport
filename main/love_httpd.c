@@ -242,6 +242,7 @@ static cJSON *state_to_json(void)
     cJSON_AddStringToObject(net_json, "apSsid", net.ap_ssid);
     cJSON_AddStringToObject(net_json, "apPass", net.ap_pass);
     cJSON_AddStringToObject(net_json, "url", net.site_url);
+    cJSON_AddStringToObject(net_json, "lanUrl", net.lan_url);
     cJSON_AddBoolToObject(net_json, "hasCredentials", net.has_credentials);
 
     cJSON *icons = cJSON_AddArrayToObject(root, "icons");
@@ -329,6 +330,15 @@ static esp_err_t handle_bg(httpd_req_t *req)
 {
     love_net_ap_touch();
     return send_blob(req, "image/png", LOVE_WEB_BG_PNG, LOVE_WEB_BG_PNG_SIZE, true);
+}
+
+// /favicon.ico 与 /apple-touch-icon*.png —— 浏览器在解析页面时自己去取这两个路径,
+// 没法用内联的 data URI 应答。三处都回同一张爱心,免得每次加载留下 404 警告。
+static esp_err_t handle_page_icon(httpd_req_t *req)
+{
+    love_net_ap_touch();
+    return send_blob(req, "image/png", LOVE_WEB_PAGE_ICON_PNG,
+                     LOVE_WEB_PAGE_ICON_PNG_SIZE, true);
 }
 
 static esp_err_t handle_state(httpd_req_t *req)
@@ -587,6 +597,10 @@ static const httpd_uri_t URIS[] = {
     { .uri = "/admin.css",     .method = HTTP_GET,  .handler = handle_css },
     { .uri = "/admin.js",      .method = HTTP_GET,  .handler = handle_js },
     { .uri = "/bg.png",        .method = HTTP_GET,  .handler = handle_bg },
+    { .uri = "/favicon.ico",   .method = HTTP_GET,  .handler = handle_page_icon },
+    { .uri = "/apple-touch-icon.png", .method = HTTP_GET, .handler = handle_page_icon },
+    { .uri = "/apple-touch-icon-precomposed.png",
+                               .method = HTTP_GET,  .handler = handle_page_icon },
     { .uri = "/api/state",     .method = HTTP_GET,  .handler = handle_state },
     { .uri = "/api/config",    .method = HTTP_POST, .handler = handle_config },
     { .uri = "/api/time",      .method = HTTP_POST, .handler = handle_time },

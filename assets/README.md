@@ -149,9 +149,9 @@ Store reusable source images and generated display assets in `images/`.
   together.
 - Destination: `assets/images/love_pixel_art.c` is compiled through
   `target_sources` in `main/CMakeLists.txt`; `tools/gen_admin_page.py` writes the
-  web assets into `main/love_web_assets.h` (the raw background-tile PNG, served by
-  the single `/bg.png` route) and `main/love_admin_page.h` (HTML/CSS/JS, served as
-  `/`, `/admin.css` and `/admin.js`).
+  web assets into `main/love_web_assets.h` (the raw background-tile PNG plus the page
+  icon, served by `/bg.png` and by `/favicon.ico` and `/apple-touch-icon*.png`) and
+  `main/love_admin_page.h` (HTML/CSS/JS, served as `/`, `/admin.css` and `/admin.js`).
 - The web icons are **inlined into `admin.js`** as data URIs rather than served as
   `/icon/N.png`: all sixteen are only 2,641 bytes, and splitting them into separate
   requests makes a single page load open a dozen extra connections, squeezing the

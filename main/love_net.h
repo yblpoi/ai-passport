@@ -30,7 +30,8 @@ typedef struct {
     char ap_ssid[33];
     char ap_pass[65];
     char sta_ssid[33];     // 已配置的 SSID;密码只写不读
-    char site_url[24];     // 后台地址,例如 http://192.168.4.1
+    char site_url[24];     // 热点地址,例如 http://192.168.4.1;热点关闭时为空
+    char lan_url[24];      // 局域网地址,例如 http://10.0.0.23;未联网时为空
 } love_net_status_t;
 
 typedef struct {

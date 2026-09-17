@@ -42,6 +42,9 @@ ICONS_PLACEHOLDER = "__ICONS_JSON__"
 PALETTE_PLACEHOLDER = "__PALETTE_JSON__"
 LUNAR_PLACEHOLDER = "__LUNAR_JSON__"
 
+# 页面图标(浏览器标签页与 iOS 主屏幕)用哪颗图标,对应 assets.json 里的 id。
+PAGE_ICON_ID = "heart"
+
 # C 字符串字面量按段拼接,避免单行过长让编译器难受。
 CHUNK = 800
 # 原始字节按 24 字节一行写,行宽约 100 列。
@@ -126,12 +129,14 @@ def write_text_header(html: str, css: str, script: str) -> None:
         encoding="utf-8")
 
 
-def write_blob_header(bg_tile: bytes) -> None:
+def write_blob_header(bg_tile: bytes, page_icon: bytes) -> None:
     BLOB_OUTPUT.write_text(
         "// main/love_web_assets.h —— 由 tools/gen_admin_page.py 生成,请勿手改。\n"
-        "// 底纹来自 assets/images/love_pixel_art_gen.py,后台网页与设备界面用的是\n"
-        "// 同一份素材。这是原始字节(不是 base64),以 /bg.png 分块发给浏览器。\n"
-        "// 图标不在这里:它们太小,直接以 data URI 内联在 admin.js 里更省连接数。\n"
+        "// 素材来自 assets/images/love_pixel_art_gen.py,后台网页与设备界面用的是\n"
+        "// 同一份素材。这些是原始字节(不是 base64),分块发给浏览器。\n"
+        "// 十六个图标不在这里:它们太小,以 data URI 内联在 admin.js 里更省连接数。\n"
+        "// 页面图标要单独放进固件,是因为浏览器会主动请求 /favicon.ico 和\n"
+        "// /apple-touch-icon*.png,那些路径没法用内联的 data URI 应答。\n"
         "#pragma once\n"
         "\n"
         "#include <stdint.h>\n"
@@ -139,6 +144,12 @@ def write_blob_header(bg_tile: bytes) -> None:
         "static const uint8_t LOVE_WEB_BG_PNG[] =\n"
         f"{to_c_bytes(bg_tile)};\n"
         "#define LOVE_WEB_BG_PNG_SIZE (sizeof(LOVE_WEB_BG_PNG) - 1)\n"
+        "\n"
+        "// assets.json 里 id 为 \"heart\" 的图标,40x40。iOS 会把它放大当主屏幕图标,\n"
+        "// 像素图放大后偏软但不糊;要清晰的 180x180 得在 love_pixel_art_gen.py 里另出一张。\n"
+        "static const uint8_t LOVE_WEB_PAGE_ICON_PNG[] =\n"
+        f"{to_c_bytes(page_icon)};\n"
+        "#define LOVE_WEB_PAGE_ICON_PNG_SIZE (sizeof(LOVE_WEB_PAGE_ICON_PNG) - 1)\n"
         "\n",
         encoding="utf-8")
 
@@ -162,14 +173,19 @@ def main() -> int:
                 return 1
 
     bg_tile = decode_png(assets["bgTile"], "底纹")
+    heart = next((icon for icon in assets["icons"] if icon["id"] == PAGE_ICON_ID), None)
+    if heart is None:
+        print(f"assets.json 里找不到 id 为 {PAGE_ICON_ID!r} 的图标"
+              f"(页面图标用的就是它)", file=sys.stderr)
+        return 1
 
     write_text_header(html, css, script)
-    write_blob_header(bg_tile)
+    write_blob_header(bg_tile, decode_png(heart["data"], f"页面图标 {PAGE_ICON_ID}"))
 
     print(f"admin page: {TEXT_OUTPUT.relative_to(ROOT)} "
           f"(HTML {len(html.encode())} + CSS {len(css.encode())} + "
           f"JS {len(script.encode())} 字节) + "
-          f"{BLOB_OUTPUT.relative_to(ROOT)} (底纹 {len(bg_tile)} B,"
+          f"{BLOB_OUTPUT.relative_to(ROOT)} (底纹 + 页面图标,"
           f"{len(assets['icons'])} 个图标已内联进 JS)")
     return 0
 

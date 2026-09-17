@@ -120,7 +120,8 @@
   改掩码后重新运行即可，设备端与网页端会同时更新。
 - 目标放置路径：`assets/images/love_pixel_art.c` 由 `main/CMakeLists.txt`
   的 `target_sources` 编译；网页素材经 `tools/gen_admin_page.py` 写进
-  `main/love_web_assets.h`（底纹 PNG 原始字节，由 `/bg.png` 单条路由返回）与
+  `main/love_web_assets.h`（底纹 PNG 与页面图标 PNG，分别由 `/bg.png`、
+  `/favicon.ico`、`/apple-touch-icon*.png` 返回）与
   `main/love_admin_page.h`（HTML/CSS/JS，由 `/`、`/admin.css`、`/admin.js` 分别返回）。
 - 网页端图标**内联在 `admin.js` 里**（data URI），不做成 `/icon/N.png`：
   十六个图标原始只有 2,641 字节，拆成独立请求会让一次页面加载多开十几条连接，

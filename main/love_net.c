@@ -389,7 +389,18 @@ void love_net_get_status(love_net_status_t *out)
     out->has_credentials = out->sta_ssid[0] != '\0';
     build_ap_identity(out->ap_ssid, sizeof(out->ap_ssid),
                       out->ap_pass, sizeof(out->ap_pass));
-    snprintf(out->site_url, sizeof(out->site_url), "http://192.168.4.1");
+    // 两个地址都给网页,由它分别显示:热点开着时 192.168.4.1 可用,但热点一旦
+    // 空闲关闭(见 love_net_poll)就只剩设备在局域网里的地址,只报其中一个
+    // 总有一半时间是错的。
+    //
+    // lan_url 用的是 s_ip —— 也就是 DHCP 实际分到的地址,每次取状态都重新拼,
+    // 不要改成任何写死的地址。租约变化后网页下次轮询就会跟着更新。
+    if (out->ap_active) {
+        snprintf(out->site_url, sizeof(out->site_url), "http://192.168.4.1");
+    }
+    if (out->state == LOVE_NET_CONNECTED && out->ip[0] != '\0') {
+        snprintf(out->lan_url, sizeof(out->lan_url), "http://%s", out->ip);
+    }
 }
 
 esp_err_t love_net_scan_start(void)

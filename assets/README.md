@@ -80,15 +80,22 @@ pixel heart wallpaper. Only these three sizes are allowed.
 - Generate and register additional sizes separately instead of switching to a
   full CJK family to add a single character.
 
-### ark12-subset.woff2 (the same pixel font for the admin page)
+### ark12-subset.woff2 (kept for reference; the admin page no longer uses it)
 
 - File: `fonts/ark12-subset.woff2` (about 122 KB), same source and license.
-- Purpose: the device preview on the admin page must show the same dot-matrix
-  letterforms as the real device; otherwise only the coordinates line up and the
-  pixel look is lost. `tools/gen_admin_page.py` and
-  `tools/preview_admin_page.py` inline it as a base64 `data:` URI.
-- Generation: subset the same TTF with `fonttools` to the same character set used
-  on the device, then convert to woff2:
+- **Nothing references it today.** The admin page preview now uses the browser's
+  own system font.
+- What it used to do: embed this subset so the preview showed the same dot-matrix
+  letterforms as the real device. It was dropped for size — 3,891 glyphs
+  (95 ASCII, ~40 CJK punctuation, 3,755 GB2312 level-1) average 32 bytes each,
+  while the page's own fixed text uses only 475 Chinese characters. Carrying the
+  full set so that *any* typed name would render in pixel form cost twenty times
+  the rest of the page. Serving it as its own route with an hour of caching was
+  still too heavy, so it is gone: the preview's coordinates, font sizes and line
+  heights are still exact (laid out on the device's 240×320 logical pixels), only
+  the letterforms are now vector.
+- To bring it back, regenerate it with the command below (the source TTF is not
+  stored in this repository; see the previous section for how to obtain it):
 
   ```bash
   pyftsubset ark-pixel-12px-proportional-zh_cn.ttf \
@@ -96,8 +103,12 @@ pixel heart wallpaper. Only these three sizes are allowed.
     --layout-features='' --output-file=assets/fonts/ark12-subset.woff2
   ```
 
-- Cost: about 163 KB added to the page after base64 encoding, which also lives in
-  firmware Flash.
+  The charset file can be recovered verbatim from the `Opts: --symbols ...` line
+  at the top of `assets/fonts/love_font_12.c`. Re-enabling it also means updating
+  `tools/gen_admin_page.py` (font input and byte output),
+  `main/love_httpd.c` (the `/font.woff2` route) and `assets/web/admin.css`
+  (the `@font-face` rule).
+- Cost: about 122 KB in the repository. It is **not** in firmware Flash.
 
 ## Images
 
@@ -137,8 +148,15 @@ Store reusable source images and generated display assets in `images/`.
   repository root. Re-running after a mask change updates device and web assets
   together.
 - Destination: `assets/images/love_pixel_art.c` is compiled through
-  `target_sources` in `main/CMakeLists.txt`; the web assets are inlined into
-  `main/love_admin_page.h` by `tools/gen_admin_page.py`.
+  `target_sources` in `main/CMakeLists.txt`; `tools/gen_admin_page.py` writes the
+  web assets into `main/love_web_assets.h` (the raw background-tile PNG, served by
+  the single `/bg.png` route) and `main/love_admin_page.h` (HTML/CSS/JS, served as
+  `/`, `/admin.css` and `/admin.js`).
+- The web icons are **inlined into `admin.js`** as data URIs rather than served as
+  `/icon/N.png`: all sixteen are only 2,641 bytes, and splitting them into separate
+  requests makes a single page load open a dozen extra connections, squeezing the
+  device heap until the Wi-Fi driver cannot allocate a transmit frame. The 167 KB
+  pixel font, not the icons, was what made the page unloadable, and it is gone.
 - License: the icons and tile are original artwork for this repository and use
   the repository license.
 - Cost: about 111 KB of source and roughly 18 KB of Flash for icons, tile and

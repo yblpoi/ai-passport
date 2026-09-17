@@ -64,13 +64,17 @@
   1bpp 未压缩），只读 Flash，不常驻内部 RAM。其中新增的 172 个一级字约占 17 KB。
 - 其他字号请另行生成并登记,不要为了补一个字改用整套 CJK 字库。
 
-### ark12-subset.woff2（后台网页用的同款像素字体）
+### ark12-subset.woff2（历史遗留，后台网页已不再使用）
 
 - 文件：`fonts/ark12-subset.woff2`（约 122 KB），来源与许可同上。
-- 用途：后台管理页的设备预览要显示成和真机一样的点阵字形，否则只能对齐坐标、
-  看不出像素味。由 `tools/gen_admin_page.py` 与 `tools/preview_admin_page.py`
-  以 base64 `data:` URI 内嵌进页面。
-- 生成：用 `fonttools` 对同一份 TTF 取与设备端相同的字符集后转 woff2：
+- **当前没有任何代码引用它。** 后台网页的设备预览改用浏览器自己的系统字体了。
+- 曾经的做法：把这个子集内嵌进页面，让预览和真机是同一套点阵字形。放弃的原因
+  是体积——3,891 个字形（ASCII 95 + 中日韩标点约 40 + GB2312 一级字 3,755）
+  平均 32 字节/字，而页面自己的固定文案只用到 475 个汉字，为了"任意姓名也能
+  显示像素字形"付了二十倍于页面本体的传输量。改成独立路由 + 一小时缓存后仍嫌重，
+  于是整个去掉：预览的坐标、字号、行高仍然精确（按 240×320 逻辑像素摆位），
+  只是字形变成矢量字体。
+- 想恢复时按下面的命令重新生成（源 TTF 见上一节的获取方式，本机没有留存）：
 
   ```bash
   pyftsubset ark-pixel-12px-proportional-zh_cn.ttf \
@@ -78,7 +82,11 @@
     --layout-features='' --output-file=assets/fonts/ark12-subset.woff2
   ```
 
-- 代价：base64 内嵌后页面体积增加约 163 KB，会一并占固件 Flash。
+  字符集文件可以从 `assets/fonts/love_font_12.c` 头部那行 `Opts: --symbols ...`
+  原样取回。若要重新启用，记得同时改 `tools/gen_admin_page.py`（加回字体输入与
+  字节输出）、`main/love_httpd.c`（加回 `/font.woff2` 路由）和
+  `assets/web/admin.css`（加回 `@font-face`）。
+- 代价：留在仓库里占约 122 KB（**不进固件 Flash**）。
 
 
 ## 图片（images）
@@ -111,8 +119,13 @@
 - 转换步骤：仓库根目录执行 `python3 assets/images/love_pixel_art_gen.py`。
   改掩码后重新运行即可，设备端与网页端会同时更新。
 - 目标放置路径：`assets/images/love_pixel_art.c` 由 `main/CMakeLists.txt`
-  的 `target_sources` 编译；网页素材经 `tools/gen_admin_page.py` 内联进
-  `main/love_admin_page.h`。
+  的 `target_sources` 编译；网页素材经 `tools/gen_admin_page.py` 写进
+  `main/love_web_assets.h`（底纹 PNG 原始字节，由 `/bg.png` 单条路由返回）与
+  `main/love_admin_page.h`（HTML/CSS/JS，由 `/`、`/admin.css`、`/admin.js` 分别返回）。
+- 网页端图标**内联在 `admin.js` 里**（data URI），不做成 `/icon/N.png`：
+  十六个图标原始只有 2,641 字节，拆成独立请求会让一次页面加载多开十几条连接，
+  把设备那点堆压到 Wi-Fi 驱动分不到发送帧。曾经让页面打不开的是 167 KB 的
+  像素字体，和图标无关，那个已经删掉了。
 - 许可：图标与底纹为本仓库原创的作品，采用本仓库许可证。
 - 代价：图标、底纹与调色板合计约 111 KB 源码 / 约 18 KB Flash（图标 13.8 KB、
   底纹 4.6 KB）；I4 图标在绘制时按行转换，不整屏缓存。

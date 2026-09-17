@@ -7,9 +7,11 @@
 #include "love_net.h"
 #include "love_store.h"
 #include "love_time.h"
+#include "love_web_assets.h"
 
 #include "cJSON.h"
 #include "bsp_battery.h"
+#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -267,25 +269,66 @@ static esp_err_t finish(httpd_req_t *req)
     return send_json(req, state_to_json(), NULL);
 }
 
-// 后台页接近 210KB,是全仓库最大的单个响应。不能用一次性 httpd_resp_send:
-// 它会在 httpd 任务里阻塞着把整个正文灌进 socket,一旦发送窗口一时排不空,
-// 就会撞上 config.send_wait_timeout(5 秒)被判定失败并直接断开连接 ——
-// 现象是浏览器/curl 报 "transfer closed with N bytes remaining to read",
-// 连头部都收到了、正文却一个字节都没有。
-// 改成 4KB 分块发送,每块之间让出 CPU 给协议栈,大响应才能稳定传完。
-#define PAGE_CHUNK_MAX 4096
+// 每块只写 512 字节。这个值不能随便放大:send() 单次能写多少,取决于 lwIP 能不能
+// 为这次写分配一块**连续**内存,而本机启动后堆只有二十 KB 上下。之前排障时正是
+// 卡在这里——驱动发一帧要 ~1600 字节连续内存,分不到就发不出帧,客户端不 ACK,
+// send() 一直阻塞到超时。块小,每次分配需求就小,和驱动抢连续内存时更从容;
+// lwIP 仍会按 MSS 把这些小写合并成满段,线上效率不受影响。
+#define PAGE_CHUNK_MAX 512
 
+// cacheable=true 用于内容随固件固定的资源(底纹、图标):给一小时缓存。
+// HTML/CSS/JS 不缓存,免得重新烧录后浏览器还按旧脚本发请求。
+static esp_err_t send_blob(httpd_req_t *req, const char *type, const void *data,
+                           size_t length, bool cacheable)
+{
+    httpd_resp_set_type(req, type);
+    httpd_resp_set_hdr(req, "Cache-Control",
+                       cacheable ? "public, max-age=3600" : "no-store");
+
+    const char *cursor = (const char *)data;
+    for (size_t offset = 0; offset < length; offset += PAGE_CHUNK_MAX) {
+        size_t chunk = length - offset;
+        if (chunk > PAGE_CHUNK_MAX) chunk = PAGE_CHUNK_MAX;
+        esp_err_t err = httpd_resp_send_chunk(req, cursor + offset, chunk);
+        if (err != ESP_OK) {
+            // 带上堆状况:这个失败几乎总是"连续内存不够",只看 EAGAIN 看不出原因。
+            ESP_LOGE(TAG, "%s 在 %u/%u 字节处发送失败: %s(堆余 %u,最大连续块 %u)",
+                     type, (unsigned)offset, (unsigned)length, esp_err_to_name(err),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+            return err;
+        }
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);   // 结束分块传输
+}
+
+// 页面、样式与脚本各自一个请求,都只有几 KB。设备预览的字形用浏览器自己的
+// 系统字体:内嵌那份像素字体子集要 122 KB,是页面的二十倍,得不偿失。
 static esp_err_t handle_page(httpd_req_t *req)
 {
     love_net_ap_touch();
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    for (size_t offset = 0; offset < LOVE_ADMIN_HTML_SIZE; offset += PAGE_CHUNK_MAX) {
-        size_t length = LOVE_ADMIN_HTML_SIZE - offset;
-        if (length > PAGE_CHUNK_MAX) length = PAGE_CHUNK_MAX;
-        esp_err_t err = httpd_resp_send_chunk(req, LOVE_ADMIN_HTML + offset, length);
-        if (err != ESP_OK) return err;
-    }
-    return httpd_resp_send_chunk(req, NULL, 0);   // 结束分块传输
+    return send_blob(req, "text/html; charset=utf-8",
+                     LOVE_ADMIN_HTML, LOVE_ADMIN_HTML_SIZE, false);
+}
+
+static esp_err_t handle_css(httpd_req_t *req)
+{
+    love_net_ap_touch();
+    return send_blob(req, "text/css; charset=utf-8",
+                     LOVE_ADMIN_CSS, LOVE_ADMIN_CSS_SIZE, false);
+}
+
+static esp_err_t handle_js(httpd_req_t *req)
+{
+    love_net_ap_touch();
+    return send_blob(req, "application/javascript; charset=utf-8",
+                     LOVE_ADMIN_JS, LOVE_ADMIN_JS_SIZE, false);
+}
+
+static esp_err_t handle_bg(httpd_req_t *req)
+{
+    love_net_ap_touch();
+    return send_blob(req, "image/png", LOVE_WEB_BG_PNG, LOVE_WEB_BG_PNG_SIZE, true);
 }
 
 static esp_err_t handle_state(httpd_req_t *req)
@@ -462,6 +505,9 @@ static esp_err_t handle_scan(httpd_req_t *req)
     if (!love_net_scan_pending()) {
         esp_err_t err = love_net_scan_start();
         if (err != ESP_OK) {
+            // 把真实原因写进日志:网页只看到一句笼统的 409,而这里的原因
+            // 通常是"当前是纯 AP 模式,STA 接口不在场",光看响应看不出来。
+            ESP_LOGW(TAG, "扫描启动失败: %s", esp_err_to_name(err));
             return send_error(req, "409 Conflict", "设备当前无法扫描(检查热点或网络状态)");
         }
     }
@@ -538,6 +584,9 @@ static esp_err_t handle_ap(httpd_req_t *req)
 
 static const httpd_uri_t URIS[] = {
     { .uri = "/",              .method = HTTP_GET,  .handler = handle_page },
+    { .uri = "/admin.css",     .method = HTTP_GET,  .handler = handle_css },
+    { .uri = "/admin.js",      .method = HTTP_GET,  .handler = handle_js },
+    { .uri = "/bg.png",        .method = HTTP_GET,  .handler = handle_bg },
     { .uri = "/api/state",     .method = HTTP_GET,  .handler = handle_state },
     { .uri = "/api/config",    .method = HTTP_POST, .handler = handle_config },
     { .uri = "/api/time",      .method = HTTP_POST, .handler = handle_time },
@@ -555,11 +604,15 @@ esp_err_t love_httpd_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = sizeof(URIS) / sizeof(URIS[0]);
-    config.max_open_sockets = 3;
+    // 一个页面要取 HTML/CSS/JS/底纹,再算上 /api/state,浏览器是并发取的。
+    // 原来只留 3 个会话,第 4 个连接进来就会触发 LRU 驱逐,把正在传输的响应掐掉。
+    // 6 是浏览器的单站并发上限;再加 httpd 内部自留的 3 个共 9 个,不超过
+    // LWIP_MAX_SOCKETS(10),不用改 lwIP 配置。
+    config.max_open_sockets = 6;
     config.lru_purge_enable = true;
     config.stack_size = 6144;
-    // 发送超时放宽到 20 秒。后台页是大响应,客户端一旦读得慢,发送窗口就会短暂
-    // 排不空;原来的 5 秒会让 httpd 把这种"慢但在推进"的情况判成失败
+    // 发送超时放宽到 20 秒。客户端一旦读得慢,发送窗口就会短暂排不空;
+    // 原来的 5 秒会让 httpd 把这种"慢但在推进"的情况判成失败
     // (日志 "httpd_sock_err: error in send : 11")并把响应掐断。
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 20;

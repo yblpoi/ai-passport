@@ -18,6 +18,7 @@
 #include "ui_pixel.h"
 
 #include "esp_app_desc.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_system.h"
@@ -1182,7 +1183,11 @@ esp_err_t love_app_start(void)
         ESP_LOGW(TAG, "BLE 对时服务启动失败");
     }
 
-    ESP_LOGI(TAG, "服务已启动,剩余堆 %u 字节", (unsigned)esp_get_free_heap_size());
+    // 最大连续块和剩余总量一样重要:Wi-Fi 驱动发一帧要一块 ~1600 字节的连续内存,
+    // 碎片化到拿不出来时下行会直接停摆(后台页的排障记录见 sdkconfig.defaults)。
+    ESP_LOGI(TAG, "服务已启动,剩余堆 %u 字节(最大连续块 %u)",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     s_services_ready = true;
     return ESP_OK;
 }

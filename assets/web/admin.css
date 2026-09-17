@@ -1,0 +1,179 @@
+/* assets/web/admin.css —— 后台网页样式,由设备以 /admin.css 单独返回。
+   底纹 /bg.png 是独立资源,不再以 data URI 内联。 */
+:root{
+  --pink:#F1959E; --pink-deep:#EAA5AC; --paper:#F4F4EA; --ink:#17202A;
+  --red:#E43B2F; --yellow:#FFD928; --green:#82BE2D; --muted:#9E9E9E;
+  --shadow:#C96F79; --bat-text:#FFE3E6;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:18px 14px 60px;
+  font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  color:var(--ink);
+  background-color:var(--pink);
+  background-image:url("/bg.png");
+  background-size:96px 96px;
+  image-rendering:pixelated;
+}
+h1{
+  font-size:20px; margin:0 0 14px; padding:12px 14px;
+  background:var(--paper); border:4px solid var(--ink);
+  box-shadow:6px 6px 0 var(--ink); letter-spacing:1px;
+}
+h1 small{display:block; font-size:12px; font-weight:400; color:#4a4a4a; margin-top:6px; letter-spacing:0}
+.grid{display:grid; gap:16px; grid-template-columns:1fr; max-width:760px; margin:0 auto}
+.card{
+  background:var(--paper); border:4px solid var(--ink);
+  box-shadow:6px 6px 0 var(--ink); padding:14px;
+}
+.card h2{
+  font-size:15px; margin:0 0 12px; padding-bottom:8px;
+  border-bottom:4px solid var(--ink); display:flex; justify-content:space-between; align-items:center;
+}
+label{display:block; font-size:13px; margin:10px 0 4px}
+input,select,button,textarea{font-family:inherit; font-size:14px}
+input[type=text],input[type=date],input[type=password],select{
+  width:100%; padding:9px 10px; background:#fff;
+  border:3px solid var(--ink); border-radius:0; color:var(--ink);
+}
+button{
+  padding:9px 14px; background:var(--paper); color:var(--ink);
+  border:3px solid var(--ink); border-radius:0; box-shadow:3px 3px 0 var(--ink);
+  cursor:pointer; font-weight:600;
+}
+button:active{transform:translate(2px,2px); box-shadow:1px 1px 0 var(--ink)}
+button.primary{background:var(--red); color:#fff}
+button.accent{background:var(--yellow)}
+button.ghost{background:#fff}
+.row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+.row>*{flex:1 1 auto}
+.muted{color:#5a5a5a; font-size:12px}
+.icons{display:grid; grid-template-columns:repeat(8,1fr); gap:6px; margin-top:6px}
+/* .icons 的 display 会盖掉 hidden 的 UA 样式，收起必须显式写。 */
+.icons[hidden]{display:none}
+.icons button{
+  padding:4px; background:#fff; box-shadow:none; border:3px solid transparent;
+}
+.icons button.sel{border-color:var(--red); background:#FFE3E6}
+.icons img{width:100%; image-rendering:pixelated; display:block}
+/* 事件的头像选择器默认收起：每条都常驻展开会让手机端页面长出好几屏。 */
+.iconrow{display:flex; align-items:center; gap:8px; margin-top:6px}
+.iconcur{
+  width:46px; padding:4px; background:#fff; box-shadow:none; border:3px solid var(--ink);
+}
+.iconcur img{width:100%; image-rendering:pixelated; display:block}
+/* 自定义头像槽位：空槽显示"＋"，点一下直接选图上传 */
+.icons button.empty{border-style:dashed; border-color:#bbb; background:#FAFAF4}
+.icons button.empty .plus{
+  display:block; font-size:22px; line-height:1; color:#8a8a8a; padding:6px 0;
+}
+.icons .avabar{
+  grid-column:1 / -1; display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  margin-top:8px; padding-top:8px; border-top:2px dashed #bbb;
+}
+.icons .avabar .muted{font-size:12px}
+.event{border:3px dashed var(--ink); padding:10px; margin-top:12px; background:#fff}
+.event .head{display:flex; justify-content:space-between; align-items:center; font-size:13px; font-weight:700}
+.kv{display:flex; justify-content:space-between; font-size:13px; padding:4px 0; border-bottom:1px dashed #bbb}
+.kv:last-child{border-bottom:0}
+.kv b{font-weight:600}
+.scan li{display:flex; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px dashed #bbb; font-size:13px; cursor:pointer}
+.scan li:hover{background:#FFE3E6}
+ul{list-style:none; margin:8px 0 0; padding:0}
+.toast{
+  position:fixed; left:50%; bottom:22px; transform:translateX(-50%);
+  background:var(--ink); color:#fff; padding:10px 16px; border:3px solid #fff;
+  font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; max-width:90vw;
+}
+.toast.show{opacity:1}
+/* 设备预览：坐标、字号、行高、素材尺寸全部按真机 240x320 的逻辑像素写，
+   并用 --s 统一缩放。改设备端 layout 时同步改这里的数值即可，不要再凭观感调。
+   字号只有 12 / 24 / 36 三种，对应真机那三套像素字库 —— 不要随手加第四种。
+   字形本身用系统字体（曾经内嵌 122 KB 的方舟像素字体子集换取'像素味'，
+   但那是一个比 HTML 本身大二十倍的响应，在热点上不值得；坐标对得上、
+   字号对得上，版式就是准的）。 */
+.device{
+  --s:1;                       /* 1 = 与真机 1:1；调小则整体等比缩小 */
+  width:calc(240px * var(--s) + 28px); margin:0 auto; padding:10px; background:#3b3b3b;
+  border:4px solid var(--ink); box-shadow:6px 6px 0 var(--ink);
+}
+.screen{
+  width:calc(240px * var(--s)); height:calc(320px * var(--s));
+  position:relative; overflow:hidden;
+  background-color:var(--pink); background-image:url("/bg.png");
+  background-size:calc(48px * var(--s)) calc(48px * var(--s));
+  color:#fff;
+  font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  image-rendering:pixelated;
+}
+.screen .el{position:absolute; left:0; right:0; text-align:center; color:#fff; white-space:nowrap}
+/* 真机: 电量一行(外壳 22x11 白框 + 粉色电量格 + 文字) TOP_RIGHT(-6,6)，12px */
+.screen .s-battery{
+  left:auto; right:calc(6px * var(--s)); top:calc(6px * var(--s));
+  position:absolute; display:flex; align-items:center; gap:calc(4px * var(--s));
+  font-size:calc(12px * var(--s)); line-height:calc(11px * var(--s));
+  color:var(--bat-text); white-space:nowrap;
+}
+.screen .bat-shell{
+  position:relative; display:block; box-sizing:border-box;
+  width:calc(22px * var(--s)); height:calc(11px * var(--s));
+  border:calc(2px * var(--s)) solid #fff; border-radius:calc(2px * var(--s));
+}
+.screen .bat-shell i{
+  position:absolute; left:0; top:0; bottom:0; width:0; background:#F7BFC4;
+}
+/* 真机: 人物框 96x100 置于 (中心-48, 34)，头像 40² 居中，名字在框内 y=46 */
+.screen .s-person{
+  position:absolute; top:calc(34px * var(--s)); width:calc(96px * var(--s));
+  text-align:center; color:#fff;
+}
+.screen .s-person img{
+  width:calc(40px * var(--s)); height:calc(40px * var(--s));
+  image-rendering:pixelated; display:block; margin:0 auto;
+}
+.screen .s-person span{
+  display:block; margin-top:calc(6px * var(--s));
+  font-size:calc(24px * var(--s)); line-height:calc(22px * var(--s));
+}
+/* 真机: 标题 TOP_MID y=120，24px */
+.screen .s-title{
+  top:calc(120px * var(--s));
+  font-size:calc(24px * var(--s)); line-height:calc(22px * var(--s));
+}
+/* 真机: 大数字 TOP_MID y=158，36px 像素数字 */
+.screen .s-big{
+  top:calc(158px * var(--s));
+  font-size:calc(36px * var(--s)); line-height:calc(33px * var(--s));
+}
+/* 真机: 单位 TOP_MID y=196，12px */
+.screen .s-unit{top:calc(196px * var(--s)); font-size:calc(12px * var(--s)); line-height:calc(11px * var(--s))}
+.screen .s-date{top:calc(228px * var(--s)); font-size:calc(12px * var(--s)); line-height:calc(11px * var(--s))}
+.screen .s-hint{
+  bottom:calc(6px * var(--s)); font-size:calc(12px * var(--s)); line-height:calc(11px * var(--s));
+}
+/* 真机: 分隔线 (60,216,120,3)，颜色 COL_SHADOW */
+.screen .s-divider{
+  position:absolute; width:calc(120px * var(--s)); height:calc(3px * var(--s));
+  left:calc(60px * var(--s)); top:calc(216px * var(--s)); background:var(--shadow);
+}
+/* 事件卡：页码 TOP_LEFT(12,8) 12px；图标 40² TOP_MID y=40；名称 y=92 24px；
+   大数字 y=130 36px；单位 y=172 12px；日期 y=194 12px —— 与 love_app.c 一致。 */
+.screen .s-page{
+  left:calc(12px * var(--s)); right:auto; text-align:left; top:calc(8px * var(--s));
+  font-size:calc(12px * var(--s)); line-height:calc(11px * var(--s));
+}
+.screen .s-event-icon{top:calc(40px * var(--s))}
+.screen .s-event-icon img{
+  width:calc(40px * var(--s)); height:calc(40px * var(--s));
+  image-rendering:pixelated; display:block; margin:0 auto;
+}
+.screen .s-event-name{top:calc(92px * var(--s)); font-size:calc(24px * var(--s)); line-height:calc(22px * var(--s))}
+.screen .s-event-big{top:calc(130px * var(--s)); font-size:calc(36px * var(--s)); line-height:calc(33px * var(--s))}
+.screen .s-event-unit{top:calc(172px * var(--s)); font-size:calc(12px * var(--s)); line-height:calc(11px * var(--s))}
+.screen .s-event-date{top:calc(194px * var(--s)); font-size:calc(12px * var(--s)); line-height:calc(11px * var(--s))}
+.pill{
+  display:inline-block; font-size:11px; padding:2px 8px; border:2px solid var(--ink);
+  background:var(--yellow);
+}
+.pill.ok{background:#B7F08B}
+.pill.warn{background:#FFC0C4}

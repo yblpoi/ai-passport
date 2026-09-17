@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """本地预览后台网页:用渲染后的模板 + 一份 mock /api/state,便于在电脑上核对版式。
 
+资源的路由与设备端一致(/admin.css、/admin.js、/bg.png),所以这里跑起来和真机
+是同一套请求,改了拆分方式也能立刻发现。图标是内联的 data URI,不走请求。
+
 用法(仓库根目录):
     python3 tools/preview_admin_page.py [端口]
 """
@@ -10,13 +13,15 @@ from __future__ import annotations
 import base64
 import json
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "assets/web/admin.html"
+WEB = ROOT / "assets/web"
+TEMPLATE = WEB / "admin.html"
+STYLESHEET = WEB / "admin.css"
+SCRIPT = WEB / "admin.js"
 ASSETS = ROOT / "assets/images/web/assets.json"
-PIXEL_FONT = ROOT / "assets/fonts/ark12-subset.woff2"
 LUNAR_TABLE = ROOT / "assets/images/web/lunar.json"
 
 # 与设备 love_store_defaults / love_time 的返回结构保持一致。
@@ -62,6 +67,38 @@ MOCK_STATE = {
 }
 
 
+def _decode_png(data_uri: str) -> bytes:
+    return base64.b64decode(data_uri.split(",", 1)[1])
+
+
+ASSETS_JSON = json.loads(ASSETS.read_text(encoding="utf-8"))
+
+
+def _render_pages() -> tuple[bytes, bytes, bytes]:
+    """按 gen_admin_page.py 的同一套占位符规则渲染三个文本资源。"""
+    icons = [{"label": icon["label"], "data": icon["data"]} for icon in ASSETS_JSON["icons"]]
+    palette = [[int(h[i:i + 2], 16) for i in (1, 3, 5)] for h in ASSETS_JSON["palette"]]
+
+    script = SCRIPT.read_text(encoding="utf-8")
+    script = script.replace("__ICONS_JSON__", json.dumps(icons, ensure_ascii=False))
+    script = script.replace("__PALETTE_JSON__", json.dumps(palette))
+    script = script.replace("__LUNAR_JSON__", LUNAR_TABLE.read_text(encoding="utf-8").strip())
+
+    return (TEMPLATE.read_text(encoding="utf-8").encode("utf-8"),
+            STYLESHEET.read_text(encoding="utf-8").encode("utf-8"),
+            script.encode("utf-8"))
+
+
+PAGE, CSS, JS = _render_pages()
+
+# 与设备端 love_httpd.c 的静态资源路由一一对应。
+STATIC = {
+    "/admin.css": (CSS, "text/css; charset=utf-8"),
+    "/admin.js": (JS, "application/javascript; charset=utf-8"),
+    "/bg.png": (_decode_png(ASSETS_JSON["bgTile"]), "image/png"),
+}
+
+
 def _query_slot(query: str):
     """从 "slot=N" 里取出槽位号;取不到或越界返回 None。"""
     for part in query.split("&"):
@@ -75,49 +112,23 @@ def _query_slot(query: str):
     return None
 
 
-def render_page() -> bytes:
-    assets = json.loads(ASSETS.read_text(encoding="utf-8"))
-    icons = [{"id": i["id"], "label": i["label"], "data": i["data"]} for i in assets["icons"]]
-    html = TEMPLATE.read_text(encoding="utf-8")
-    html = html.replace("__ICONS_JSON__", json.dumps(icons, ensure_ascii=False))
-    html = html.replace("__BG_TILE_URI__", assets["bgTile"])
-    palette = [[int(h[i:i + 2], 16) for i in (1, 3, 5)] for h in assets["palette"]]
-    html = html.replace("__PALETTE_JSON__", json.dumps(palette))
-    if LUNAR_TABLE.exists():
-        html = html.replace("__LUNAR_JSON__", LUNAR_TABLE.read_text(encoding="utf-8").strip())
-    # 与 gen_admin_page.py 保持一致:内嵌同一份像素字体子集,预览才和真机同字形。
-    if PIXEL_FONT.exists():
-        font_uri = ("data:font/woff2;base64,"
-                    + base64.b64encode(PIXEL_FONT.read_bytes()).decode("ascii"))
-        html = html.replace("__PIXEL_FONT_URI__", font_uri)
-    else:
-        html = html.replace("__PIXEL_FONT_URI__", "")
-    return html.encode("utf-8")
-
-
-PAGE = render_page()
-
-
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
-        if self.path == "/" :
-            body, ctype = PAGE, "text/html; charset=utf-8"
-        elif self.path == "/api/state":
-            body, ctype = json.dumps(MOCK_STATE, ensure_ascii=False).encode("utf-8"), \
-                "application/json; charset=utf-8"
-        elif self.path == "/api/scan":
-            body, ctype = json.dumps({"aps": [
+        if self.path == "/":
+            return self._send(200, PAGE, "text/html; charset=utf-8")
+        if self.path == "/api/state":
+            return self._send(200, json.dumps(MOCK_STATE, ensure_ascii=False).encode("utf-8"),
+                              "application/json; charset=utf-8")
+        if self.path == "/api/scan":
+            return self._send(200, json.dumps({"aps": [
                 {"ssid": "home-2.4g", "rssi": -48, "secure": True},
                 {"ssid": "FoloToy-A1B2", "rssi": -66, "secure": False},
-            ]}, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8"
-        else:
-            self.send_error(404)
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+            ]}, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+        if self.path in STATIC:
+            body, ctype = STATIC[self.path]
+            return self._send(200, body, ctype)
+
+        self.send_error(404)
 
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
@@ -137,28 +148,37 @@ class Handler(BaseHTTPRequestHandler):
                 MOCK_STATE["avatars"][slot] = base64.b64encode(payload).decode("ascii")
 
         body = json.dumps(MOCK_STATE, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self._send(200, body, "application/json; charset=utf-8")
+
+    def _send(self, code: int, body: bytes, ctype: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def _error(self, code: int, message: str) -> None:
         body = json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send(code, body, "application/json; charset=utf-8")
 
     def log_message(self, *_args):
         pass
 
 
+class PreviewServer(ThreadingHTTPServer):
+    """浏览器会一口气开好几个连接,默认 5 个的 listen backlog 会把多余的连接拒掉
+    (表现为控制台里的 ERR_CONNECTION_RESET / ERR_SOCKET_NOT_CONNECTED),
+    看起来像资源缺失。真机那边靠 max_open_sockets = 6 + lwIP 的队列接住。"""
+
+    daemon_threads = True
+    request_queue_size = 64
+    allow_reuse_address = True
+
+
 def main() -> int:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     print(f"preview: http://127.0.0.1:{port}/ (Ctrl+C 结束)")
-    HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    PreviewServer(("127.0.0.1", port), Handler).serve_forever()
     return 0
 
 

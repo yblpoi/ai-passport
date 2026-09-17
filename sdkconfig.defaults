@@ -24,10 +24,19 @@ CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 只画纯色块、标签和 4bpp 图标,对象数量很少,24KB 足够;
-# 历史上为了 demo 菜单的卡片墙 + 吉祥物调到 32KB,那些页面已随 demo 子系统删除。
+# 只画纯色块、标签和 4bpp 图标,对象数量很少;历史上为了 demo 菜单的卡片墙 + 吉祥物
+# 调到 32KB,那些页面已随 demo 子系统删除。
 # 注意这块是从系统堆里切走的:调大会挤掉 Wi-Fi/BLE/HTTP 的余量。
-CONFIG_LV_MEM_SIZE_KILOBYTES=24
+#
+# 从 24KB 降到 18KB 是为了给系统堆腾出更大的一块连续可用内存,这是后台网页
+# 打不开的根因:实测传大响应时,失败瞬间"最大连续块"只有 1216~1408 字节,
+# 而 Wi-Fi 驱动发一帧需要约 1600 字节连续内存 —— 分不到就发不出帧,客户端不 ACK,
+# lwIP 的 send() 一直阻塞到超时。症状很有迷惑性:1KB 以下的小响应毫秒级正常,
+# 重启后第一个大响应也能过,之后下行就永久死掉(手机和电脑都一样,只能重启恢复)。
+# 降到 18KB 后堆从 13.8KB 变成 20.0KB、最大连续块 11776 字节,问题消失。
+# 界面只用 lv_obj / lv_label / lv_image 与 flex 布局,18KB 够用;若出现控件创建
+# 失败(界面缺元素或断言),再往上调回一些。
+CONFIG_LV_MEM_SIZE_KILOBYTES=18
 
 # LVGL 的 examples/ 与 demos/ 默认参与编译,但产品固件不需要它们:
 # 编进去只会拖慢构建,而且 examples 里用到 slider/button 等控件,会与下面的

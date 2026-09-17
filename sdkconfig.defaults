@@ -112,17 +112,27 @@ CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
 CONFIG_BT_NIMBLE_NVS_PERSIST=n
 
 # BLE 一旦打开就吃掉约 65 KB 堆(实测:79,212 → 12,784 字节),而本机只要
-# "广播 + 一条连接 + 一次 8 字节写入 + 一小段读"这点流量 —— 默认的缓冲池是按
-# 多连接、批量吞吐给的,严重超配。下面几项把它收到够用:
-#   MSYS_2 是主机侧待发 ACL 数据,24×320B → 8×320B
-#   ACL_FROM_LL 是从控制器上行的 ACL 缓冲,24×255B → 8×255B
-#   EVT 是控制器事件缓冲,30×70B → 12×70B
+# "广播 + 一条连接 + 若干条串口命令"这点流量 —— 默认的缓冲池是按多连接、
+# 批量吞吐给的,严重超配。两轮收下来:
+#   MSYS_2 是主机侧待发 ACL 数据,24×320B → 8×320B → 6×320B
+#   ACL_FROM_LL 是从控制器上行的 ACL 缓冲,24×255B → 8×255B → 6×255B
+#   EVT 是控制器事件缓冲,30×70B → 12×70B → 8×70B
 # 省下来的堆直接决定"蓝牙开着时后台网页还能不能传大文件"。
-CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=8
-CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=8
-CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=12
+# 第一轮之后实测 12,784 → 28,224 字节(最大连续块 7,680 → 20,480),页面已能工作。
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=6
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=6
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=8
 
-# 控制器侧:6 个并发 BLE 活动我们只用得上 2 个(一个广播集 + 一条连接);
-# 100 个广播上报缓冲是给扫描用的,而设备从不做 BLE 扫描(附近 Wi-Fi 扫描走的是 Wi-Fi)。
+# 刻意**不动** MSYS_1(12×256B):串口控制台的输出走 ble_hs_mbuf_from_flat()
+# 从 MSYS_1 取块,裁小会在手机读得慢时丢字。
+
+# NimBLE host 任务默认 4096,实测水位见设备上的 `status` 命令(读 nimble_host
+# 任务的 uxTaskGetStackHighWaterMark)。它只跑协议栈回调,回调里只入队不打印。
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=3072
+
+# 控制器侧:6 个并发 BLE 活动我们只用得上 2 个(一个广播集 + 一条连接)。
+# 广播上报缓冲是给扫描用的,而设备从不做 BLE 扫描(附近 Wi-Fi 扫描走的是 Wi-Fi),
+# 但 Kconfig 的下限就是 50,填 10 会被静默忽略并回落到默认 100(实测构建日志里有
+# "user value 10 ... outside the active range ([50, 1000])")。50 × 35B 已是能取的最小值。
 CONFIG_BT_CTRL_BLE_MAX_ACT=2
-CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM=10
+CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM=50

@@ -292,7 +292,9 @@ function renderPreview(){
   byId("pvNameA").textContent = model.people[0].name || "TA";
   byId("pvNameB").textContent = model.people[1].name || "TA";
 
-  const e = model.events[0];
+  // 事件卡预览:优先取**第一条单页事件** —— 真机上卡片只可能是"单页"事件,
+  // 列表事件不会单独成卡。一条单页事件都没有时退回第一条,当样例看看排版。
+  const e = model.events.find((ev) => (ev.viewMode ?? 0) === 1) || model.events[0];
   if(e){
     const synced = !!(lastTime && lastTime.synced);
     let target = null;
@@ -321,18 +323,36 @@ function renderPreview(){
     setAvatarImg(byId("pvEventIcon"), e.icon);
   }
   byId("eventCount").textContent = model.events.length ? `共 ${model.events.length} 条` : "还没有事件";
+  updatePreviewPage();
   updatePreviewHint();
 }
 
-// 底部提示行要跟真机一致:农历事件的卡片提示不同,列表模式下主屏的上/下是"进列表"。
-// 单独成函数是因为它同时依赖"当前预览哪个屏"和"展示模式",两边都要能触发刷新。
+// 底部提示行要跟真机一致:设备上上/下 一律是"翻页"(单页卡与列表页都在同一个轮播上)。
+// 单独成函数是因为它同时依赖"当前预览哪个屏"和"有没有可翻的页",两边都要能触发刷新。
 function updatePreviewHint(){
   const main = byId("pvMainView").style.display !== "none";
-  // 设备上事件卡不再能改日期,所以卡片提示只说怎么走;主屏提示看有没有"列表"事件。
-  const hasList = model.events.some((e) => (e.viewMode ?? 0) === 0);
-  byId("pvHint").textContent = main
-    ? (hasList ? "上/下 列表 · 长按确定 设置" : "上/下 切换 · 长按确定 设置")
-    : "上/下 翻卡 · 长按确定 设置";
+  // 真机主屏只在环上真有页时才提示上/下;一页都没有时上/下 什么都不做。
+  byId("pvHint").textContent = (main && ringPageTotal() === 0)
+    ? "长按确定 设置"
+    : "上/下 翻页 · 长按确定 设置";
+}
+
+// 真机的页码是**整套轮播**的编号(规则与 main/love_view.h 一致):单页事件各占一页,
+// 列表事件每 4 条一页,合起来就是分母。
+function ringPageTotal(){
+  const cards = model.events.filter((e) => (e.viewMode ?? 0) === 1).length;
+  const list = model.events.filter((e) => (e.viewMode ?? 0) === 0).length;
+  return cards + Math.ceil(list / 4);
+}
+
+// 预览画的卡片是第一张单页卡(真机上只有"单页"事件才有卡片),所以序号恒为 1。
+// 没有单页事件时真机上根本没有卡片页,连页码一起隐藏 —— 不留一个假编号。
+function updatePreviewPage(){
+  const main = byId("pvMainView").style.display !== "none";
+  const hasCard = model.events.some((e) => (e.viewMode ?? 0) === 1);
+  const label = byId("pvEventPage");
+  label.style.display = (main || !hasCard) ? "none" : "";
+  label.textContent = "1/" + Math.max(1, ringPageTotal());
 }
 
 // 切换预览视图时，页码与底部提示行也要跟真机一致。
@@ -340,8 +360,7 @@ function showPreviewView(which){
   const main = which === "main";
   byId("pvMainView").style.display = main ? "" : "none";
   byId("pvEventView").style.display = main ? "none" : "";
-  byId("pvEventPage").style.display = main ? "none" : "";
-  byId("pvEventPage").textContent = "1/" + model.events.length;
+  updatePreviewPage();
   updatePreviewHint();
 }
 

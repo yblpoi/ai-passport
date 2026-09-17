@@ -876,61 +876,67 @@ static void render(void)
 
     if (s_view == VIEW_LIST) {
         rebuild_order(today, holds);
+        // 事件可能在后台网页上被删光。此时不能停在一张空列表上,直接落回主屏
+        // (不 return,让下面主屏那条分支接着画)。
+        if (s_order_count == 0) {
+            s_view = VIEW_MAIN;
+        } else {
+            const int pages = (s_order_count + LIST_PAGE_ROWS - 1) / LIST_PAGE_ROWS;
+            const int page = s_sel / LIST_PAGE_ROWS + 1;
+            s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
+            lv_label_set_text_fmt(s_page, "%d/%d", page, pages);
+            lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
 
-        const int pages = (s_order_count + LIST_PAGE_ROWS - 1) / LIST_PAGE_ROWS;
-        const int page = s_sel / LIST_PAGE_ROWS + 1;
-        s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
-        lv_label_set_text_fmt(s_page, "%d/%d", page, pages > 0 ? pages : 1);
-        lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
+            const int first = (page - 1) * LIST_PAGE_ROWS;
+            for (int row = 0; row < LIST_PAGE_ROWS; row++) {
+                const int pos = first + row;
+                if (pos >= s_order_count) break;
 
-        const int first = (page - 1) * LIST_PAGE_ROWS;
-        for (int row = 0; row < LIST_PAGE_ROWS; row++) {
-            const int pos = first + row;
-            if (pos >= s_order_count) break;
+                const love_event_t *event = &s_cfg.events[s_order[pos]];
+                const int row_top = LIST_ROW_TOP + row * LIST_ROW_PITCH;
+                const bool selected = (pos == s_sel);
 
-            const love_event_t *event = &s_cfg.events[s_order[pos]];
-            const int row_top = LIST_ROW_TOP + row * LIST_ROW_PITCH;
-            const bool selected = (pos == s_sel);
+                // 选中块先铺,行内文字再按选中状态换色压在上面。
+                if (selected) ui_pixel_block(s_scr, 10, row_top - 3, 220, 48, COL_WHITE);
 
-            // 选中块先铺,行内文字再按选中状态换色压在上面。
-            if (selected) ui_pixel_block(s_scr, 10, row_top - 3, 220, 48, COL_WHITE);
+                lv_obj_t *icon = lv_image_create(s_scr);
+                lv_image_set_src(icon, resolve_icon(event->icon));
+                lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 12, row_top + 2);
 
-            lv_obj_t *icon = lv_image_create(s_scr);
-            lv_image_set_src(icon, resolve_icon(event->icon));
-            lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 12, row_top + 2);
+                const bool has_category = event->category[0] != '\0';
+                if (has_category) {
+                    const int cat_w = category_width(event->category);
+                    // 选中行的底色本来就是白的,再铺一块白标签等于没画,只在未选中时铺。
+                    if (!selected) ui_pixel_block(s_scr, 60, row_top + 3, cat_w, 15, COL_WHITE);
+                    lv_obj_t *cat = cjk_small(s_scr, event->category, COL_INK);
+                    lv_label_set_long_mode(cat, LV_LABEL_LONG_CLIP);
+                    lv_obj_set_width(cat, cat_w - 6);
+                    lv_obj_align(cat, LV_ALIGN_TOP_LEFT, 63, row_top + 5);
+                }
 
-            const bool has_category = event->category[0] != '\0';
-            if (has_category) {
-                const int cat_w = category_width(event->category);
-                // 选中行的底色本来就是白的,再铺一块白标签等于没画,只在未选中时铺。
-                if (!selected) ui_pixel_block(s_scr, 60, row_top + 3, cat_w, 15, COL_WHITE);
-                lv_obj_t *cat = cjk_small(s_scr, event->category, COL_INK);
-                lv_label_set_long_mode(cat, LV_LABEL_LONG_CLIP);
-                lv_obj_set_width(cat, cat_w - 6);
-                lv_obj_align(cat, LV_ALIGN_TOP_LEFT, 63, row_top + 5);
+                lv_obj_t *name = cjk_label(s_scr, event->name,
+                                           selected ? COL_INK : COL_WHITE);
+                lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
+                // 宽度**不能**铺到右列去:24px 的名字会压在右对齐的天数文案上。
+                // 120 让名字止于 x=180,最宽的天数文案("3 天前"约 40px)从 x≈188 起。
+                lv_obj_set_width(name, 120);
+                // 有分类时给分类标签让出一行,没有就整行靠中间一点。
+                lv_obj_align(name, LV_ALIGN_TOP_LEFT, 60,
+                             has_category ? row_top + 19 : row_top + 7);
+
+                // 24 字节:最坏情况是 int 的 11 位数字 + " 天前"(7 字节) + 结尾。
+                // 实际日期被夹在 1970..2099,最多 5 位数。
+                char days[24];
+                format_row_days(days, sizeof(days), event, today, holds);
+                lv_obj_t *day = cjk_small(s_scr, days, selected ? COL_INK : COL_WHITE);
+                lv_obj_align(day, LV_ALIGN_TOP_RIGHT, -12, row_top + 23);
             }
 
-            lv_obj_t *name = cjk_label(s_scr, event->name,
-                                       selected ? COL_INK : COL_WHITE);
-            lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
-            // 宽度**不能**铺到右列去:24px 的名字会压在右对齐的天数文案上。
-            // 120 让名字止于 x=180,最宽的天数文案("3 天前"约 40px)从 x≈188 起。
-            lv_obj_set_width(name, 120);
-            // 有分类时给分类标签让出一行,没有就整行居中一点。
-            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 60, has_category ? row_top + 19 : row_top + 7);
-
-            // 24 字节:最坏情况是 int 的 11 位数字 + " 天前"(7 字节) + 结尾。
-            // 实际日期被夹在 1970..2099,最多 5 位数。
-            char days[24];
-            format_row_days(days, sizeof(days), event, today, holds);
-            lv_obj_t *day = cjk_small(s_scr, days, selected ? COL_INK : COL_WHITE);
-            lv_obj_align(day, LV_ALIGN_TOP_RIGHT, -12, row_top + 23);
+            hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 打开 · 长按设置", COL_WHITE);
+            lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
+            lv_screen_load(s_scr);
+            return;
         }
-
-        hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 打开 · 长按设置", COL_WHITE);
-        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
-        lv_screen_load(s_scr);
-        return;
     }
 
     if (s_view == VIEW_MAIN || s_cfg.event_count == 0) {

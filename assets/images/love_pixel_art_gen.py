@@ -34,20 +34,21 @@ ICON_SCALE = 5   # 8 -> 40，整数倍放大才不会有半像素
 ICON_PX = MASK_PX * ICON_SCALE
 BG_TILE_PX = 48
 
-# 头像的圆角半径(像素),内置图标与自定义头像用同一个值。
+# 为什么内置图标**不做**圆角(以及为什么"缩小一点"解决不了问题):
 #
-# 为什么不做"圆形头像底座"(旧结论,仍成立):圆形必然裁掉方形图标的四角,实测 16 个
-# 角色里有 15 个会掉实心像素(猫咪少 186 个、礼物少 284 个,耳朵和边角直接被切平)。
-# 现在采纳的是**轻圆角**:半径 4px 下四角一共只裁 17 个画布像素,而 16 个图标里
-# 9 个四角本来就是空的(它们是透明背景的图形,不是方牌),真正被裁到实心像素的合计
-# 只有 64 个 —— 星星/蛋糕/礼物各 12、叶子 8、猫/狗/熊/狐狸各 5。这远比圆形温和,
-# 换取自定义头像(照片,满幅方角)不再生硬。
+# 这些图标是 8x8 掩码放大 5 倍的**透明背景图形**,不是方块牌。四角有 8 个图标的描边
+# 确实伸到了画布边缘(猫/狗/熊/狐狸的顶部两角、星星/蛋糕/礼物的底部两角、叶子各一个),
+# 施半径 4px 的圆角会各切掉 6 个描边像素,合计 48 个(占全部图标像素的 0.19%)。
+# 而"把图标缩小一点让圆角只落在空白上"是无效的:缩小后圆角落在透明上,视觉上等于
+# 没有圆角,唯一可见的变化就是图标变小了 —— 8x8 掩码从 5x 降到 4x 会小 20%。
+# 换句话说图形类图标要么保持原样(方角,但没人看得出"方"),要么被切;两者之间没有
+# 更好的第三选项。这里选保持原样。
 #
-# 圆角同时作用于设备端 I4 数据、导出的 PNG 与网页 data URI:它们都由同一份
-# arrays 生成,置成 TRANSPARENT 即可,因为图标调色板的索引 0 固定是透明。
-ICON_CORNER_RADIUS = 4
+# 圆角只作用于**自定义头像**(照片,满幅方角),由 main/ui_pixel_math.c 的
+# ui_pixel_corner_cut() 在解码成 ARGB8888 时把角落 alpha 置 0;网页端 admin.css
+# 用同一个半径,并且只给自定义头像的 img 加圆角(给图形图标加会同样切到描边)。
+# 圆形底座仍然不做:实测圆形会让 16 个角色里 15 个掉实心像素(猫咪少 186、礼物少 284)。
 
-TRANSPARENT = (0, 0, 0, 0)
 
 # 与 main/ui_pixel.h 的配色保持一致，避免设备与网页出现两套颜色。
 PALETTE = {
@@ -282,30 +283,6 @@ def scale(rows, factor: int):
     return out
 
 
-def round_corners(rows, radius: int):
-    """把画布四角裁成圆角:像素中心落在圆角矩形之外的位置置为透明。
-
-    判定用像素中心((x+0.5, y+0.5))对角落弧心的距离,等价于 CSS 的
-    border-radius 在整数像素下的取整结果。只作用于图标,底纹不动。"""
-    if radius <= 0:
-        return rows
-
-    height, width = len(rows), len(rows[0])
-    out = [list(row) for row in rows]
-    for y in range(height):
-        for x in range(width):
-            # 不在任何角落方块内就不必判定
-            arc_x = radius - 0.5 if x < radius else (
-                width - radius - 0.5 if x >= width - radius else None)
-            arc_y = radius - 0.5 if y < radius else (
-                height - radius - 0.5 if y >= height - radius else None)
-            if arc_x is None or arc_y is None:
-                continue
-            if (x + 0.5 - arc_x) ** 2 + (y + 0.5 - arc_y) ** 2 > radius * radius:
-                out[y][x] = TRANSPARENT
-    return out
-
-
 def write_png(path: Path, rows: list[list[tuple[int, int, int, int]]]) -> None:
     """手写最小 PNG 编码器，避免引入 Pillow 依赖。"""
     height = len(rows)
@@ -378,8 +355,7 @@ def main() -> None:
     arrays: list[tuple[str, list[list[tuple[int, int, int, int]]]]] = []
 
     for name, label, mask in ICONS:
-        rows = round_corners(scale(parse_mask(mask), ICON_SCALE), ICON_CORNER_RADIUS)
-        arrays.append((name, rows))
+        arrays.append((name, scale(parse_mask(mask), ICON_SCALE)))
         icons.append((name, label))
 
     c_lines = [

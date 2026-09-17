@@ -16,6 +16,7 @@
 #include "love_time.h"
 #include "power_sleep.h"
 #include "ui_pixel.h"
+#include "ui_pixel_math.h"
 
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
@@ -244,22 +245,10 @@ static int s_avatar_used;
 // 内置图标是在生成器里把角落像素改成透明的(调色板索引 0 即透明),自定义头像的
 // 调色板没有透明项,只能在这里解码时把角落的 alpha 置 0 —— 两边视觉上才是同一套圆角。
 // 存的 4bpp 数据不动,所以上传、存储、网页缩略图都不受影响。
+//
+// 判定式在 ui_pixel_math.c 里(纯逻辑,有主机测试保证四角对称);早先本地写过一版
+// "负数当哨兵"的判断,结果只有右下角生效,别再内联一份。
 #define AVATAR_CORNER_RADIUS 4
-
-// 用整数判定,避免浮点:把坐标整体放大 2 倍(像素中心在 (2x+1, 2y+1),
-// 弧心在 (2r-1, 2r-1)),比较式与生成器里的 (x+0.5-arc)² + … > r² 完全等价。
-static bool avatar_corner_cut(int x, int y)
-{
-    const int r = AVATAR_CORNER_RADIUS;
-    int dx2 = -1, dy2 = -1;
-    if (x < r) dx2 = 2 * (x - r + 1);
-    else if (x >= LOVE_ICON_PX - r) dx2 = 2 * (x - (LOVE_ICON_PX - r) + 1);
-    if (y < r) dy2 = 2 * (y - r + 1);
-    else if (y >= LOVE_ICON_PX - r) dy2 = 2 * (y - (LOVE_ICON_PX - r) + 1);
-
-    if (dx2 < 0 || dy2 < 0) return false;   // 不在角落方块内
-    return dx2 * dx2 + dy2 * dy2 > 4 * r * r;
-}
 
 static const lv_image_dsc_t *resolve_icon(uint8_t icon)
 {
@@ -289,7 +278,8 @@ static const lv_image_dsc_t *resolve_icon(uint8_t icon)
             dst[p * 4 + 0] = (uint8_t)(rgb & 0xFF);          // B
             dst[p * 4 + 1] = (uint8_t)((rgb >> 8) & 0xFF);   // G
             dst[p * 4 + 2] = (uint8_t)((rgb >> 16) & 0xFF);  // R
-            dst[p * 4 + 3] = avatar_corner_cut(x, y) ? 0x00 : 0xFF;   // A
+            dst[p * 4 + 3] = ui_pixel_corner_cut(x, y, LOVE_ICON_PX, LOVE_ICON_PX,
+                                                 AVATAR_CORNER_RADIUS) ? 0x00 : 0xFF;   // A
         }
     }
     const size_t pixels = (size_t)LOVE_ICON_PX * LOVE_ICON_PX;

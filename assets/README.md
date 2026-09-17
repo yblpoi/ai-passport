@@ -140,21 +140,29 @@ Store reusable source images and generated display assets in `images/`.
 - The palette order is the 4 bpp index order for uploaded custom avatars
   (`PALETTE_ORDER`). **Changing it recolors every avatar already uploaded**, so it
   is written out explicitly rather than relying on dict order.
-- Avatar corner rounding: radius **4 px**, set by `ICON_CORNER_RADIUS`. A **circular**
-  chip is still rejected: measured, a circle clips solid pixels off 15 of the 16
-  characters (the cat loses 186, the gift 284 — ears and corners get flattened).
-  A 4 px rounding is far milder: the four corners clip 17 canvas pixels in total,
-  8 of the 16 icons already have empty corners (they are shapes on a transparent
-  background, not square tiles), and only 64 pixels of real artwork are removed
-  across all sixteen — 12 each on the star, cake and gift, 8 on the leaf, 5 each
-  on the cat, dog, bear and fox. It is what keeps an uploaded photo from looking
-  hard-edged.
-  The radius must match in three places: this file, `AVATAR_CORNER_RADIUS` in
-  `main/love_app.c` (the custom-avatar palette has no transparent entry, so the
-  corners can only be masked to alpha 0 while decoding to ARGB8888), and
-  `assets/web/admin.css`. Built-in icons instead get their corner pixels set to
-  transparent at generation time (palette index 0 is transparent), which keeps the
-  I4 data, the exported PNGs and the web data URIs consistent automatically.
+- Avatar corner rounding: radius **4 px**, applied **only to uploaded custom avatars**
+  (photos, which are full-bleed squares). The built-in icons are deliberately left
+  alone. The test lives in one place, `ui_pixel_corner_cut()` in
+  `main/ui_pixel_math.c`, and a host test pins the four corners as **exact mirrors**
+  of each other -- an earlier version used a negative value as a "not in a corner"
+  sentinel, and only the bottom-right corner ended up rounded.
+  A **circular** chip is still rejected: measured, a circle clips solid pixels off
+  15 of the 16 characters (the cat loses 186, the gift 284).
+  **Why the built-in icons are not rounded:** they are *shapes* on a transparent
+  background, not square tiles, and eight of them do reach the canvas corners --
+  the cat, dog, bear and fox at their two top corners, the star, cake and gift at
+  their two bottom corners, and the leaf at one of each. A 4 px radius nicks 6
+  outline pixels off each of those, 48 pixels in total (0.19% of all icon pixels).
+  Shrinking the icons so the rounding only lands on empty space does not help:
+  the rounding then falls on transparent pixels, so it is invisible and the only
+  visible change is that the icons got smaller -- and preserving the pixel grid
+  means dropping the 8x8 mask from 5x to 4x, which is 20% smaller. For a shape the
+  choice is only "leave it alone" or "nick it", so it is left alone.
+  Both sides agree: `assets/web/admin.css` rounds only custom-avatar images
+  (`img.rounded`; rounding the icons there would nick the same outlines), and the
+  device masks custom-avatar corners to alpha 0 while decoding to ARGB8888 (the
+  avatar palette has no transparent entry) through the same
+  `ui_pixel_corner_cut()`.
 - Conversion steps: run `python3 assets/images/love_pixel_art_gen.py` from the
   repository root. Re-running after a mask change updates device and web assets
   together.

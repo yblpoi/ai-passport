@@ -113,6 +113,14 @@ function iconLabel(idx){
   return idx < ICONS.length ? ICONS[idx].label : `自定义 ${idx - ICONS.length + 1}`;
 }
 
+// 只有自定义头像(照片,满幅方角)加圆角。内置图标是透明背景的图形,给它加圆角
+// 会切到描边(实测 8 个图标的四角各有描边,合计 48 个像素),而设备端刻意不做这件事
+// —— 两端必须一致,否则网页预览会显示成设备上没有的样子。
+function setAvatarImg(el, idx){
+  el.src = iconSrc(idx);
+  el.classList.toggle("rounded", idx >= ICONS.length);
+}
+
 async function uploadAvatar(slot, file){
   const bytes = await compressAvatar(file);
   const res = await fetch(`/api/avatar?slot=${slot}`, {
@@ -279,13 +287,8 @@ function renderPreview(){
   const soc = typeof lastBattery === "number" && lastBattery >= 0 ? lastBattery : null;
   byId("pvBattery").textContent = soc === null ? "-- %" : soc + "%";
   byId("pvBatFill").style.width = (soc === null ? 0 : soc) + "%";
-  ICONS.forEach((ic, i) => {
-    if(i === model.people[0].icon) byId("pvIconA").src = ic.data;
-    if(i === model.people[1].icon) byId("pvIconB").src = ic.data;
-  });
-  // 自定义头像(16..19)不在 ICONS 里,单独兜一次
-  if(model.people[0].icon >= ICONS.length) byId("pvIconA").src = iconSrc(model.people[0].icon);
-  if(model.people[1].icon >= ICONS.length) byId("pvIconB").src = iconSrc(model.people[1].icon);
+  setAvatarImg(byId("pvIconA"), model.people[0].icon);
+  setAvatarImg(byId("pvIconB"), model.people[1].icon);
   byId("pvNameA").textContent = model.people[0].name || "TA";
   byId("pvNameB").textContent = model.people[1].name || "TA";
 
@@ -315,7 +318,7 @@ function renderPreview(){
     byId("pvEventUnit").textContent = !synced ? "未同步"
                                       : (!target ? "农历超出范围" : (diff >= 0 ? "天后" : "天前"));
     byId("pvEventDate").textContent = dateLine;
-    byId("pvEventIcon").src = iconSrc(e.icon);
+    setAvatarImg(byId("pvEventIcon"), e.icon);
   }
   byId("eventCount").textContent = model.events.length ? `共 ${model.events.length} 条` : "还没有事件";
 }
@@ -350,7 +353,7 @@ function iconPicker(container, onPick, selected, onAvatarChanged){
     btn.title = iconLabel(i);
     btn.innerHTML = (custom && !uploaded)
       ? '<span class="plus">＋</span>'
-      : `<img src="${custom ? avatarThumb(AVATARS[slot]) : ICONS[i].data}" alt="">`;
+      : `<img class="${custom ? "rounded" : ""}" src="${custom ? avatarThumb(AVATARS[slot]) : ICONS[i].data}" alt="">`;
     btn.onclick = () => {
       // 空的自定义槽位：点一下直接选图，省掉"先选中再上传"的两步
       if(custom && !uploaded){
@@ -461,7 +464,7 @@ function renderEvents(){
       <label>头像 <span class="muted">${iconLabelText}</span></label>
       <div class="iconrow">
         <button type="button" class="iconcur" data-toggle="${idx}" title="更换头像">
-          <img src="${iconSrcText}" alt="${iconLabelText}"></button>
+          <img class="${e.icon >= ICONS.length ? "rounded" : ""}" src="${iconSrcText}" alt="${iconLabelText}"></button>
         <button type="button" class="ghost" data-toggle="${idx}">${open ? "收起" : "更换"}</button>
       </div>
       <div class="icons" data-icons="${idx}"${open ? "" : " hidden"}></div>`;

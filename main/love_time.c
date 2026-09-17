@@ -13,10 +13,6 @@
 
 static const char *TAG = "love_time";
 
-// 早于 2020 或晚于 2100 的时间戳按无效处理,避免脏数据把界面带偏。
-#define EPOCH_MIN 1577836800ull
-#define EPOCH_MAX 4102444800ull
-
 #define SNTP_ATTEMPT_TIMEOUT_MS 1000
 #define SNTP_RETRY_INTERVAL_US  (60 * 1000000LL)        // 没同步上:每分钟再试
 #define SNTP_RESYNC_INTERVAL_US (30 * 60 * 1000000LL)   // 已同步:每 30 分钟校准一次
@@ -76,7 +72,7 @@ static void notify_listeners(void)
 
 static void apply_time(uint64_t epoch_seconds, love_time_src_t source)
 {
-    if (epoch_seconds < EPOCH_MIN || epoch_seconds > EPOCH_MAX) {
+    if (epoch_seconds < LOVE_TIME_EPOCH_MIN || epoch_seconds > LOVE_TIME_EPOCH_MAX) {
         ESP_LOGW(TAG, "忽略越界的时间戳");
         return;
     }
@@ -234,7 +230,9 @@ const char *love_time_src_text(love_time_src_t source)
     switch (source) {
     case LOVE_TIME_SRC_SNTP: return "网络对时";
     case LOVE_TIME_SRC_WEB:  return "网页对时";
-    case LOVE_TIME_SRC_BLE:  return "蓝牙对时";
+    // 老固件的 BLE 对时与现在的串口控制台都是"手动敲进去的时间戳",同一个说法。
+    case LOVE_TIME_SRC_BLE:
+    case LOVE_TIME_SRC_CONSOLE: return "串口对时";
     default:                 return "未同步";
     }
 }

@@ -38,6 +38,9 @@ run_static_checks() (
     }
 
     run_host_test test_ui_pixel_math main main/ui_pixel_math.c
+    # 控制台的行协议:BLE 串口一次写入可能只有半行,也可能一次带好几行,
+    # 行尾在手机 App 上有三种写法,超长行必须整行丢弃而不是截断后执行。
+    run_host_test test_love_console_line main main/love_console_line.c
     # 配置的版本迁移:全仓最容易静默清空用户数据的一段逻辑,必须有主机测试。
     run_host_test test_love_config main main/love_config.c main/love_date.c main/love_lunar.c
     # love_date.c 的农历事件会调 love_lunar,所以两个测试都要带上 love_lunar.c。

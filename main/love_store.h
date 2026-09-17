@@ -8,12 +8,16 @@
 #include "love_config.h"
 #include "love_date.h"
 
-// 时间来源,用于界面提示“时间从哪来”。
+// 时间来源,用于界面提示“时间从哪来”。**这些值会存进 NVS**,只能往后追加,
+// 不能改动或删除已有项的数值 —— 否则老设备里已经写下的来源会被读成别的意思。
 typedef enum {
     LOVE_TIME_SRC_NONE = 0,
     LOVE_TIME_SRC_SNTP,
     LOVE_TIME_SRC_WEB,
+    // 老固件把 BLE 对时写进来的值。设备改为 BLE 串口控制台后这条路已经没了,
+    // 但历史记录里可能还是它,保留数值并在界面上与串口对时显示同一个词。
     LOVE_TIME_SRC_BLE,
+    LOVE_TIME_SRC_CONSOLE,   // 命令行控制台(USB 或 BLE 串口)写入的时间戳
 } love_time_src_t;
 
 #define LOVE_WIFI_SSID_MAX 33

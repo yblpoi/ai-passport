@@ -1,8 +1,13 @@
-// main/love_ble.h —— BLE 对时通道。
+// main/love_ble.h —— 蓝牙串口控制台(Nordic UART Service)。
 //
-// 设备广播一个自定义 GATT 服务:手机用任意 BLE 调试工具(nRF Connect、
-// LightBlue 等)连上后,向“时间”特征写入时间戳即可对时;状态特征会回读当前
-// 时间与来源,便于在手机上确认。这里不做 Wi-Fi 配网,配网走后台热点网页。
+// 设备广播成 LoveCount-XXXX,手机用任意 BLE 串口 App(Serial Bluetooth Terminal、
+// nRF Connect 等)连上,就能像 USB 串口那样敲命令(见 love_console.h)。用标准 NUS
+// UUID 是为了让现成 App 不用手配 UUID。
+//
+// 不做 Wi-Fi 配网也不做对时:配网走这里敲 wifi 命令或走后台热点网页,
+// 对时走 SNTP、网页,或者这里的 time 命令。
+//
+// 蓝牙默认关闭(配置里的 ble_enabled),开启后无人连接满 5 分钟会自动关闭并写回配置。
 #pragma once
 
 #include "esp_err.h"
@@ -14,16 +19,26 @@
 // 广播名形如 LoveCount-XXXX(XXXX 取自 MAC 后两字节)。
 void love_ble_device_name(char *buf, size_t size);
 
-// 服务/特征 UUID(16 位自定义):A001 服务、A002 写入时间、A003 读取状态。
-#define LOVE_BLE_SVC_UUID   0xA001
-#define LOVE_BLE_TIME_UUID  0xA002
-#define LOVE_BLE_STATE_UUID 0xA003
-
 esp_err_t love_ble_start(void);
 esp_err_t love_ble_stop(void);
-// 是否正在广播。注意启动过程中会短暂为 false。
-bool love_ble_ready(void);
 
 // 协议栈是否已经起来(包含"已启动但还没开始广播"的短暂状态)。
-// 要决定"该不该 stop"时用这个,别用 love_ble_ready() —— 否则启动途中会漏掉一次关闭。
+// 要决定"该不该 start/stop"时用这个 —— 别用广播状态,启动途中它是 false。
 bool love_ble_running(void);
+
+// 当前是否有手机连着。
+bool love_ble_connected(void);
+
+// 状态中文短文案(未开启/启动中/广播中/已连接)。界面与 status 命令共用一张表。
+const char *love_ble_state_text(void);
+
+// 无人连接的秒数;有连接时返回 0。满 5 分钟就自动关闭。
+uint32_t love_ble_idle_seconds(void);
+
+// 关蓝牙的请求:由**应用层**执行(要写回配置、刷新界面)。空闲超时与
+// "从 BLE 链路敲 ble off"都会走它。注册方必须自己保证线程安全。
+void love_ble_set_shutdown_cb(void (*fn)(void));
+void love_ble_request_stop(void);
+
+// NimBLE host 任务的剩余栈(字节);没在跑时返回 0。用于确认 host 栈没有配得太小。
+size_t love_ble_host_stack_headroom(void);

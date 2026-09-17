@@ -1,9 +1,9 @@
 // main/love_time.h —— 设备时间服务。
 //
-// AI Passport 没有 RTC,时间只有三个来源:联网后的 SNTP、后台网页里手机浏览器
-// 的当前时间、以及 BLE 客户端写入的时间戳。任一路径写入后都会存进 NVS,之后
-// 靠开机以来的微秒计数推算当前时间;断电期间不推进,重启后若尚未对时会明确
-// 显示“时间未同步”,不会假装知道日期。
+// AI Passport 没有 RTC,时间有三个来源:联网后的 SNTP、后台网页里手机浏览器
+// 的当前时间、以及命令行控制台(USB 或 BLE 串口)里敲进去的时间戳。任一路径写入
+// 后都会存进 NVS,之后靠开机以来的微秒计数推算当前时间;断电期间不推进,重启后
+// 若尚未对时会明确显示“时间未同步”,不会假装知道日期。
 #pragma once
 
 #include "esp_err.h"
@@ -14,6 +14,12 @@
 
 // 东八区偏移,界面与后台都按北京时间展示。
 #define LOVE_TZ_OFFSET_SECONDS (8 * 3600)
+
+// 早于 2020 或晚于 2100 的时间戳按无效处理,避免脏数据把界面带偏。
+// 放在头文件里是为了让控制台的 time 命令能在写入**之前**就挡掉明显不对的值 ——
+// 真正的写入是异步的(走队列),只靠 love_time_set() 的返回值看不出被忽略了。
+#define LOVE_TIME_EPOCH_MIN 1577836800ull
+#define LOVE_TIME_EPOCH_MAX 4102444800ull
 
 typedef struct {
     uint64_t epoch_seconds;
@@ -41,7 +47,7 @@ void love_time_sntp_stop(void);
 // 界面文案:例如 “时间 来源:网页对时” / “时间未同步”。
 void love_time_describe(const love_time_state_t *state, char *buf, size_t size);
 
-// 时间来源的中文短文案(网络对时/网页对时/蓝牙对时/未同步)。
+// 时间来源的中文短文案(网络对时/网页对时/串口对时/未同步)。
 // 界面与后台 REST 都从这里取,避免同一张映射表写两遍。
 const char *love_time_src_text(love_time_src_t source);
 

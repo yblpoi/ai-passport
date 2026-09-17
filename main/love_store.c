@@ -252,7 +252,9 @@ bool love_store_load_time(uint64_t *epoch_seconds, love_time_src_t *src)
     nvs_close(handle);
 
     if (err != ESP_OK || size != sizeof(record) || record.epoch_seconds == 0) return false;
-    if (record.source > (uint8_t)LOVE_TIME_SRC_BLE) record.source = (uint8_t)LOVE_TIME_SRC_NONE;
+    // 来源是枚举而不是自由字段,NVS 里的值可能是被改坏或降级固件写进来的,
+    // 超出已知范围就当作"未同步"。上界必须跟着 love_time_src_t 的最后一项目走。
+    if (record.source > (uint8_t)LOVE_TIME_SRC_CONSOLE) record.source = (uint8_t)LOVE_TIME_SRC_NONE;
     if (epoch_seconds) *epoch_seconds = record.epoch_seconds;
     if (src) *src = (love_time_src_t)record.source;
     return true;

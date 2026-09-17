@@ -105,6 +105,7 @@ static int64_t s_last_input_us;
 static bool s_screen_off;
 
 static void render(void);
+static void set_note(const char *text);
 
 
 /* ---------- 小工具 ---------- */
@@ -437,7 +438,7 @@ static const action_t SETTING_ACTIONS[SETTINGS_ROWS] = {
     ACT_NONE,        // 网络
     ACT_SYNC,        // 时间
     ACT_BLANK_OFF,   // 自动熄屏
-    ACT_BLE_TOGGLE,  // 蓝牙对时(开关)
+    ACT_BLE_TOGGLE,  // 蓝牙串口(开关)
     ACT_STATUS,      // 本机状态
     ACT_BACK,        // 返回主屏
 };
@@ -495,9 +496,9 @@ static int build_settings(setting_row_t *rows)
              BLANK_OFF_LABELS[blank_off_index()]);
     count++;
 
-    rows[count].label = "蓝牙对时";
-    // 显示"配置状态"而不是 love_ble_ready():后者是运行时结果,打开失败时会与
-    // 用户刚选的值不一致,失败已经由 set_note 提示了。
+    rows[count].label = "蓝牙串口";
+    // 显示"配置状态"而不是 love_ble_state_text():打开失败时会与用户刚选的值不一致,
+    // 那种失败已经由 set_note 提示了。运行时的三态在"本机状态"页看。
     snprintf(rows[count].value, sizeof(rows[count].value), "%s",
              s_cfg.ble_enabled ? "开" : "关");
     count++;
@@ -558,7 +559,9 @@ static void status_info_lines(char lines[STATUS_INFO_ROWS][40])
     }
     i++;
 
-    snprintf(lines[i], 40, "蓝牙  %s", love_ble_ready() ? "广播中" : "未广播");
+    // 三态,别再用"广播中/未广播"两态:连上之后广播是停的,但蓝牙显然在工作,
+    // 显示"未广播"会让人以为蓝牙关了。
+    snprintf(lines[i], 40, "蓝牙  %s", love_ble_state_text());
     i++;
 
     snprintf(lines[i], 40, "内存  %u 字节", (unsigned)esp_get_free_heap_size());
@@ -912,19 +915,54 @@ static void tick(lv_timer_t *timer)
 
 /* ---------- 外部事件 ---------- */
 
+// 只把蓝牙的启停对齐到 want,**不动配置**。
+// 必须是本文件里唯一调 love_ble_start/stop 的地方:love_ble_stop() 会等 NimBLE
+// host 任务退出,所以所有调用点都得在 LVGL 锁外。
+static esp_err_t ble_apply(bool on)
+{
+    if (on == love_ble_running()) return ESP_OK;
+    return on ? love_ble_start() : love_ble_stop();
+}
+
+esp_err_t love_app_set_ble(bool on)
+{
+    const esp_err_t err = ble_apply(on);
+    if (err != ESP_OK) return err;
+
+    if (bsp_lvgl_lock(300)) {
+        const uint8_t value = on ? 1 : 0;
+        const bool changed = s_cfg.ble_enabled != value;
+        s_cfg.ble_enabled = value;
+        render();
+        bsp_lvgl_unlock();
+        // 只有真的变了才写 NVS:空闲自动关每关一次就写一遍没有必要。
+        if (changed && love_store_save_config(&s_cfg) != ESP_OK) {
+            ESP_LOGW(TAG, "蓝牙开关保存失败");
+        }
+    }
+    return ESP_OK;
+}
+
+// 蓝牙要求关机:空闲超时,或者从 BLE 链路敲了 ble off。
+static void on_ble_shutdown(void)
+{
+    const esp_err_t err = love_app_set_ble(false);
+    if (bsp_lvgl_lock(300)) {
+        set_note(err == ESP_OK ? "蓝牙已自动关闭" : "蓝牙关闭失败");
+        render();
+        bsp_lvgl_unlock();
+    }
+}
+
 static void on_config_changed(void)
 {
     // 后台改了配置:先重新载入,再把蓝牙启停对齐到新配置。
     // 网页上的蓝牙开关只写配置;不在这里收敛的话要等下次重启才生效(实测踩过)。
-    // love_ble_stop() 会等 NimBLE host 任务退出,所以必须在持有 LVGL 锁之前调用。
+    // 这里**不能**走 love_app_set_ble():它会把整个 s_cfg 写回 NVS,而 s_cfg 还是
+    // 网页保存之前的旧配置,等于把用户刚改的东西抹掉。
     love_config_t next;
     love_store_load_config(&next);
-    const bool want_ble = next.ble_enabled != 0;
-    if (want_ble && !love_ble_running()) {
-        if (love_ble_start() != ESP_OK) ESP_LOGW(TAG, "蓝牙打开失败");
-    } else if (!want_ble && love_ble_running()) {
-        if (love_ble_stop() != ESP_OK) ESP_LOGW(TAG, "蓝牙关闭失败");
-    }
+    if (ble_apply(next.ble_enabled != 0) != ESP_OK) ESP_LOGW(TAG, "蓝牙开关未对齐");
 
     if (!bsp_lvgl_lock(500)) return;
     s_cfg = next;
@@ -1086,18 +1124,7 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         // love_ble_stop() 要等 NimBLE host 任务退出,必须在 LVGL 锁外调用;
         // 这段 switch 本来就是"慢操作",放在锁外执行。
         const bool want = !s_cfg.ble_enabled;
-        esp_err_t err = ESP_OK;
-        if (want) {
-            err = love_ble_start();
-        } else if (love_ble_running()) {
-            err = love_ble_stop();
-        }
-        if (err == ESP_OK) {
-            s_cfg.ble_enabled = want ? 1 : 0;
-            if (love_store_save_config(&s_cfg) != ESP_OK) {
-                ESP_LOGW(TAG, "蓝牙开关保存失败");
-            }
-        }
+        const esp_err_t err = love_app_set_ble(want);
         if (bsp_lvgl_lock(300)) {
             set_note(err == ESP_OK ? (want ? "蓝牙已打开" : "蓝牙已关闭")
                                    : "蓝牙操作失败");
@@ -1244,10 +1271,12 @@ esp_err_t love_app_start(void)
     if (love_httpd_start() != ESP_OK) {
         ESP_LOGW(TAG, "后台网页启动失败");
     }
-    // 蓝牙按配置启停,出厂默认关。关掉能把 NimBLE 的任务栈与控制器缓冲还给系统堆
-    // (这个固件的堆一向紧张),代价是没有 BLE 对时 —— Wi-Fi/SNTP 与网页手动对时不受影响。
-    if (s_cfg.ble_enabled && love_ble_start() != ESP_OK) {
-        ESP_LOGW(TAG, "BLE 对时服务启动失败");
+    // 蓝牙串口(对时/配网都能走它)按配置启停,出厂默认关。关着能把 NimBLE 的
+    // 任务栈与控制器缓冲还给系统堆(这个固件的堆一向紧张);开着无人连接满 5 分钟
+    // 也会自动关掉并把配置写回。
+    love_ble_set_shutdown_cb(on_ble_shutdown);
+    if (s_cfg.ble_enabled && ble_apply(true) != ESP_OK) {
+        ESP_LOGW(TAG, "蓝牙串口启动失败");
     }
 
     // 最大连续块和剩余总量一样重要:Wi-Fi 驱动发一帧要一块 ~1600 字节的连续内存,

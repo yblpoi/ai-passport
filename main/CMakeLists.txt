@@ -12,10 +12,13 @@ idf_component_register(
          "love_net.c"
          "love_ble.c"
          "love_httpd.c"
+         "love_console_line.c"
          "love_console.c"
     INCLUDE_DIRS "."
     # esp_app_format 提供 esp_app_desc.h,本机状态页要读固件版本号。
-    REQUIRES bsp bt console esp_app_format esp_event esp_hw_support esp_http_server esp_netif esp_timer esp_wifi json nvs_flash
+    # esp_driver_usb_serial_jtag 提供 usb_serial_jtag_vfs_use_nonblocking():没有 USB
+    # 主机时阻塞写会把控制台和 NimBLE host 一起卡死,必须显式设成非阻塞。
+    REQUIRES bsp bt console esp_app_format esp_driver_usb_serial_jtag esp_event esp_hw_support esp_http_server esp_netif esp_timer esp_wifi json nvs_flash
 )
 
 # 生成的素材:像素字库(assets/fonts/)与像素图标、爱心底纹、调色板(assets/images/)。

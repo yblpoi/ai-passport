@@ -1,58 +1,102 @@
-// main/love_console.c —— USB 串口配网命令行。
+// main/love_console.c —— 命令行控制台,USB 与 BLE 共用一套命令(见 love_console.h)。
 //
-// 存在的理由:配网本来只有两条路——连设备热点进后台网页、或走 BLE 对时那套。
-// 前者每次都要先开热点再找地址,很麻烦;插着 USB 时直接敲一行就完事。
-// 三条链路并存,这里只是多一条入口,不替代任何一条。
+// 命令表 COMMANDS 是唯一真源:USB 侧把它逐条注册进 esp_console,BLE 侧在同一个
+// 表上自己派发。刻意不用 esp_console_run():它的内置 help 命令直接 printf 到
+// stdout,BLE 侧一个字也看不到。
 //
 // 密码处理:命令只在终端里回显一次(本地配置不可避免),但**绝不写进日志、也不回读**。
 // love_net_status_t 里唯一带密码的是 ap_pass,那是热点密码(由 MAC 派生、本来就印在
 // 设备屏幕上),用户配置的那个密码只有写入路径、没有读出接口。
 #include "love_console.h"
 
+#include "love_app.h"
+#include "love_ble.h"
+#include "love_console_line.h"
 #include "love_net.h"
+#include "love_time.h"
 
+#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "love_console";
 
-static void print_status(void)
+// 单条输出的上限。最长的一行是 wifi 状态里的"后台网页: http://10.255.234.34/"。
+#define OUT_MAX 192
+
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
+static bool s_started;
+static void (*s_out)(const char *text, size_t len);
+
+static love_console_src_t src_of(void *ctx)
+{
+    return (love_console_src_t)(uintptr_t)ctx;
+}
+
+void love_console_set_out(void (*fn)(const char *text, size_t len))
+{
+    s_out = fn;
+}
+
+void love_console_out(const char *fmt, ...)
+{
+    char buf[OUT_MAX];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    // stdout 已在 start() 里设成非阻塞:设备只插充电器(没有 USB 主机)时
+    // ring buffer 不会有人排空,阻塞写会把调用它的任务连同整条链路一起卡住。
+    fputs(buf, stdout);
+    if (s_out) s_out(buf, strlen(buf));
+}
+
+/* ---------- 命令实现 ---------- */
+
+static void print_wifi_status(void)
 {
     love_net_status_t net;
     love_net_get_status(&net);
 
-    printf("网络: %s", love_net_state_text(net.state));
-    if (net.ip[0] != '\0') printf(", IP %s", net.ip);
-    printf("\n");
+    love_console_out("网络: %s", love_net_state_text(net.state));
+    if (net.ip[0] != '\0') love_console_out(", IP %s", net.ip);
+    love_console_out("\n");
 
     if (net.has_credentials) {
-        printf("已配置 Wi-Fi: %s\n", net.sta_ssid);
+        love_console_out("已配置 Wi-Fi: %s\n", net.sta_ssid);
     } else {
-        printf("尚未配置 Wi-Fi。热点 %s 已开启,密码见设备屏幕。\n", net.ap_ssid);
+        love_console_out("尚未配置 Wi-Fi。热点 %s 已开启,密码见设备屏幕。\n", net.ap_ssid);
     }
 
     const char *site = net.site_url[0] ? net.site_url
                      : (net.lan_url[0] ? net.lan_url : NULL);
-    printf("后台网页: %s\n", site ? site : "暂不可达");
+    love_console_out("后台网页: %s\n", site ? site : "暂不可达");
 }
 
-static int cmd_wifi(int argc, char **argv)
+static int cmd_wifi(void *ctx, int argc, char **argv)
 {
+    (void)ctx;
+
     if (argc == 1) {
-        print_status();
+        print_wifi_status();
         return 0;
     }
 
     if (strcmp(argv[1], "clear") == 0) {
         if (love_net_forget() != ESP_OK) {
-            printf("清除凭据失败。\n");
+            love_console_out("清除凭据失败。\n");
             return 1;
         }
-        printf("凭据已清除,热点已打开,可以重新配网。\n");
+        love_console_out("凭据已清除,热点已打开,可以重新配网。\n");
         return 0;
     }
 
@@ -60,12 +104,11 @@ static int cmd_wifi(int argc, char **argv)
     const bool open = (strcmp(argv[1], "open") == 0);
     const int ssid_index = open ? 2 : 1;
     if (argc <= ssid_index || (!open && argc <= ssid_index + 1)) {
-        printf("用法:\n"
-               "  wifi                 查看当前状态\n"
-               "  wifi <名称> <密码>   保存并连接\n"
-               "  wifi open <名称>     连接开放网络\n"
-               "  wifi clear           清除已保存的凭据\n"
-               "名称与密码不能含空格。\n");
+        love_console_out("用法:\n"
+                         "  wifi                 查看当前状态\n"
+                         "  wifi <名称> <密码>   保存并连接\n"
+                         "  wifi open <名称>     连接开放网络\n"
+                         "  wifi clear           清除已保存的凭据\n");
         return 1;
     }
 
@@ -74,16 +117,184 @@ static int cmd_wifi(int argc, char **argv)
 
     esp_err_t err = love_net_set_credentials(ssid, pass);
     if (err != ESP_OK) {
-        printf("保存 \"%s\" 失败: %s。\n", ssid, esp_err_to_name(err));
+        love_console_out("保存 \"%s\" 失败: %s。\n", ssid, esp_err_to_name(err));
         return 1;
     }
-    printf("已保存 \"%s\"(%s),正在连接;稍后用 wifi 查看结果。\n",
-           ssid, open ? "开放网络" : "已加密");
+    love_console_out("已保存 \"%s\"(%s),正在连接;稍后用 wifi 查看结果。\n",
+                     ssid, open ? "开放网络" : "已加密");
     return 0;
 }
 
+static int cmd_ble(void *ctx, int argc, char **argv)
+{
+    const love_console_src_t src = src_of(ctx);
+
+    if (argc == 1 || strcmp(argv[1], "status") == 0) {
+        love_console_out("蓝牙: %s\n", love_ble_state_text());
+        return 0;
+    }
+
+    bool on;
+    if (strcmp(argv[1], "on") == 0) {
+        on = true;
+    } else if (strcmp(argv[1], "off") == 0) {
+        on = false;
+    } else {
+        love_console_out("用法: ble / ble on / ble off\n");
+        return 1;
+    }
+
+    if (!on && src == LOVE_CONSOLE_SRC_BLE) {
+        // 关栈会把这条连接一起断掉,回复根本发不出去。交给 love_ble 的工作任务:
+        // 它先把这一行通知发完,再隔一拍执行关闭。
+        love_console_out("蓝牙即将关闭,连接会断开。\n");
+        love_ble_request_stop();
+        return 0;
+    }
+
+    esp_err_t err = love_app_set_ble(on);
+    if (err != ESP_OK) {
+        love_console_out("蓝牙%s失败: %s。\n", on ? "打开" : "关闭", esp_err_to_name(err));
+        return 1;
+    }
+    love_console_out("蓝牙已%s。\n", on ? "打开" : "关闭");
+    return 0;
+}
+
+static int cmd_time(void *ctx, int argc, char **argv)
+{
+    (void)ctx;
+
+    if (argc == 1) {
+        love_time_state_t state;
+        love_time_get(&state);
+        if (!state.holds) {
+            love_console_out("时间未同步。\n");
+            return 0;
+        }
+        char described[48] = { 0 };
+        love_time_describe(&state, described, sizeof(described));
+        love_console_out("%s\n", described);
+        return 0;
+    }
+
+    char *end = NULL;
+    const unsigned long long value = strtoull(argv[1], &end, 10);
+    // 越界在 love_time_set() 里是**异步**被忽略的,只看它的返回值会给出
+    // "已对时"的假象,所以这里按同一套上下界先挡一道。
+    if (end == argv[1] || *end != '\0' || value == 0) {
+        love_console_out("要写成 Unix 秒(十进制整数),例如 time 1750000000。\n");
+        return 1;
+    }
+    if (value < LOVE_TIME_EPOCH_MIN || value > LOVE_TIME_EPOCH_MAX) {
+        love_console_out("这个时间戳不在 2020–2100 之间,拒绝写入。\n");
+        return 1;
+    }
+    if (love_time_set((uint64_t)value, LOVE_TIME_SRC_CONSOLE) != ESP_OK) {
+        love_console_out("对时失败。\n");
+        return 1;
+    }
+    love_console_out("已按串口对时。\n");
+    return 0;
+}
+
+static int cmd_status(void *ctx, int argc, char **argv)
+{
+    (void)ctx;
+    (void)argc;
+    (void)argv;
+
+    love_time_state_t time_state;
+    love_time_get(&time_state);
+    if (time_state.holds) {
+        char described[48] = { 0 };
+        love_time_describe(&time_state, described, sizeof(described));
+        love_console_out("时间  %s\n", described);
+    } else {
+        love_console_out("时间  %s\n",
+                         time_state.wifi_pending ? "等待网络对时" : "未同步");
+    }
+
+    love_net_status_t net;
+    love_net_get_status(&net);
+    love_console_out("网络  %s%s%s\n", love_net_state_text(net.state),
+                     net.ip[0] ? ", IP " : "", net.ip);
+    love_console_out("蓝牙  %s\n", love_ble_state_text());
+
+    // 这两个数比"剩余堆"更能预测网页能不能传大文件:Wi-Fi 驱动发一帧要一块
+    // 约 1600 字节的连续内存,连续块不够时页面就传不动。
+    love_console_out("内存  剩余 %u, 最大连续块 %u\n",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+
+    const size_t headroom = love_ble_host_stack_headroom();
+    if (headroom > 0) love_console_out("蓝牙栈余 %u 字节\n", (unsigned)headroom);
+    return 0;
+}
+
+static int cmd_help(void *ctx, int argc, char **argv);
+
+typedef struct {
+    const char *name;
+    const char *help;
+    int (*func)(void *ctx, int argc, char **argv);
+} love_command_t;
+
+static const love_command_t COMMANDS[] = {
+    { "wifi",   "配置 Wi-Fi:wifi / wifi <名称> <密码> / wifi open <名称> / wifi clear", cmd_wifi },
+    { "ble",    "蓝牙串口:ble(看状态)/ ble on / ble off", cmd_ble },
+    { "time",   "对时:time 看当前时间,time <Unix 秒> 写入", cmd_time },
+    { "status", "时间、网络、蓝牙与内存状态", cmd_status },
+    { "help",   "列出所有命令", cmd_help },
+};
+
+static int cmd_help(void *ctx, int argc, char **argv)
+{
+    (void)ctx;
+    (void)argc;
+    (void)argv;
+
+    for (size_t i = 0; i < ARRAY_SIZE(COMMANDS); i++) {
+        love_console_out("%s\n    %s\n", COMMANDS[i].name, COMMANDS[i].help);
+    }
+    return 0;
+}
+
+/* ---------- 派发 ---------- */
+
+int love_console_exec(char *line, love_console_src_t src)
+{
+    if (!line) return 0;
+
+    char *argv[LOVE_ARGV_MAX];
+    size_t argc = 0;
+    const love_cmd_status_t status = love_line_split(line, argv, LOVE_ARGV_MAX, &argc);
+
+    if (status == LOVE_CMD_EMPTY) return 0;
+    if (status == LOVE_CMD_TOO_MANY_ARGS) {
+        // 不截断后执行:少一个参数的 wifi 命令会把错误的东西写进 NVS。
+        love_console_out("参数太多。敲 help 看用法。\n");
+        return 1;
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(COMMANDS); i++) {
+        if (strcmp(argv[0], COMMANDS[i].name) == 0) {
+            return COMMANDS[i].func((void *)(uintptr_t)src, (int)argc, argv);
+        }
+    }
+
+    love_console_out("未知命令 \"%s\",敲 help 看支持哪些。\n", argv[0]);
+    return 127;
+}
+
+/* ---------- 启动 ---------- */
+
 esp_err_t love_console_start(void)
 {
+    // 幂等:love_app_start() 在深睡眠回滚后会再调一次,重复注册会多出一个
+    // REPL 任务(多一份 4KB 栈)并抢同一条命令表。
+    if (s_started) return ESP_OK;
+
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     // 历史只留在 RAM:history_save_path 保持 NULL(默认值),显式写出来是因为它是一条
     // 安全约束——敲过的命令行里有 Wi-Fi 密码,不能落到文件上。
@@ -93,8 +304,8 @@ esp_err_t love_console_start(void)
     // 而且驱动缓冲已经分配过、白扔掉几 KB)。1 = 只保留最近一条,够用又留得最少。
     repl_config.max_history_len = 1;
     repl_config.prompt = "> ";
-    // 最长的合法命令行是「wifi <32 字节 SSID> <64 字节密码>」,128 足够。
-    repl_config.max_cmdline_length = 128;
+    // 与 BLE 侧的 love_line_t 用同一个长度上限,免得同一个命令在两个入口上限制不同。
+    repl_config.max_cmdline_length = LOVE_LINE_MAX;
     // 单位是字节(IDF 的 xTaskCreate 栈深与 vanilla FreeRTOS 不同),4KB 与 love_time
     // 的工作任务一致;控制台任务本身只做行编辑与命令派发。
     repl_config.task_stack_size = 4096;
@@ -114,16 +325,25 @@ esp_err_t love_console_start(void)
         return err;
     }
 
-    const esp_console_cmd_t cmd = {
-        .command = "wifi",
-        .help = "配置 Wi-Fi:wifi <名称> <密码> / wifi open <名称> / wifi clear",
-        .func = cmd_wifi,
-    };
-    err = esp_console_cmd_register(&cmd);
-    if (err == ESP_OK) err = esp_console_register_help_command();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "注册控制台命令失败: %s", esp_err_to_name(err));
-        return err;
+    // 没有 USB 主机(设备只插充电器)时,USB-Serial-JTAG 的 TX FIFO 永远没人排空,
+    // 阻塞写会把调用方永久卡住 —— BLE 串口敲一条命令就会把控制台和 NimBLE host
+    // 一起拖死。设成非阻塞后写不进去就丢弃,这正是调试口该有的行为。
+    usb_serial_jtag_vfs_use_nonblocking();
+
+    for (size_t i = 0; i < ARRAY_SIZE(COMMANDS); i++) {
+        const esp_console_cmd_t cmd = {
+            .command = COMMANDS[i].name,
+            .help = COMMANDS[i].help,
+            // 用带上下文的回调把"来自哪条链路"传进去,而不是读一个全局变量:
+            // USB REPL 任务与 BLE 工作任务可能同时在执行命令。
+            .func_w_context = COMMANDS[i].func,
+            .context = (void *)(uintptr_t)LOVE_CONSOLE_SRC_USB,
+        };
+        err = esp_console_cmd_register(&cmd);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "注册命令 %s 失败: %s", COMMANDS[i].name, esp_err_to_name(err));
+            return err;
+        }
     }
 
     err = esp_console_start_repl(repl);
@@ -132,6 +352,7 @@ esp_err_t love_console_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "USB 串口控制台已就绪:敲 wifi 查看用法");
+    s_started = true;
+    ESP_LOGI(TAG, "USB 串口控制台已就绪:敲 help 看用法");
     return ESP_OK;
 }

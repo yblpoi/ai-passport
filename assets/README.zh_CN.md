@@ -23,22 +23,30 @@
   - `fonts/love_font_12.c`：正文小字，界面提示行、起始日、单位、电量、设置页
   - `fonts/love_font_24.c`：主字号，标题、人像名字、事件名
   - `fonts/love_font_36.c`：只含 `0123456789+-.:/%`，用于天数大数字
-- 来源与许可：**方舟像素字体 / Ark Pixel Font** 12px 尺寸、简体中文（zh_cn）比例模式，
-  SIL Open Font License 1.1，随附 `fonts/OFL-ark-pixel.txt`；仓库只提交生成结果
-  与转换命令，不提交原始 TTF。
+- 来源与许可：**缝合像素字体 / Fusion Pixel Font** 12px 尺寸、简体中文（zh_hans）
+  比例模式，SIL Open Font License 1.1，随附 `fonts/OFL-fusion-pixel.txt`。它是方舟
+  像素字体（Ark Pixel Font）官方给出的过渡方案：**以方舟像素字体作为基础字形和度量
+  参数**，再用其他同尺寸像素字体补足缺口。仍保留 `fonts/OFL-ark-pixel.txt`，因为真正
+  被渲染的正是它提供的那些方舟字形。仓库只提交生成结果与转换命令，不提交原始 TTF。
+- 使用的缝合像素字体版本：`2026.09.01`，
+  `fusion-pixel-font-12px-proportional-ttf-v2026.09.01.zip`，其中的
+  `fusion-pixel-12px-proportional-zh_hans.ttf`
+  （<https://github.com/TakWolf/fusion-pixel-font/releases>）。
 - **为什么字号只能是 12 / 24 / 36**：像素字体是在固定的 12px 设计网格上手绘的，
   只有整数倍放大（1×/2×/3×）才能保证每个笔画仍然落在整像素上。实测该字体在
   12/24/36/48 下 `adv_w` 与 `box_w/h` 严格成倍数关系，非整数倍会让笔画粗细不匀、
   失去点阵观感。**不要新增第四种字号**。
-- 字符范围：ASCII 0x20–0x7E、常用中文标点、GB2312 一级汉字。
-  字符集与字体自身 cmap 求过交集，实际收录 3718 字（该字体缺 175 个一级字，
-  例如部分生僻字；缺字会回落到 Montserrat，因此人名里出现生僻字可能显示异常）。
+- 字符范围：ASCII 0x20–0x7E、常用中文标点，以及**完整的 GB2312 一级汉字**，共
+  **3890 字**。早先直接以方舟像素字体为源时，它的 cmap 里缺 172 个一级字，其中包含
+  然 窗 紧 警 药 恋 缘 热 执 这类日常用字；这些字在任何地方都没有字形，LVGL 会画成
+  占位方框，自定义姓名里出现它们同样会变方框。改用缝合像素字体重新生成后，正好补上
+  这 172 个字形，而原有 3718 个字形**逐字节不变**，所以没有任何文字移位或变形。
 - 生成命令（仓库根目录，`lv_font_conv` 版本 1.5.3）：
   字符集与生成脚本见 `assets/images/` 同级的开发记录；核心命令形如：
 
   ```bash
   lv_font_conv \
-    --font <ark-pixel-12px-proportional-zh_cn.ttf> \
+    --font <fusion-pixel-12px-proportional-zh_hans.ttf> \
     --symbols "<字符集>" \
     --size 24 --bpp 1 --format lvgl --no-compress \
     --lv-font-name love_font_24 --lv-include lvgl.h \
@@ -52,7 +60,8 @@
 - 目标放置路径：`assets/fonts/love_font_*.c`，由 `main/CMakeLists.txt` 的
   `target_sources` 编译进 `main` 组件；应用侧用 `LV_FONT_DECLARE` 声明，
   并复制一份可写描述符把 fallback 指向 Montserrat，覆盖缺字与 LVGL 图标。
-- 代价：合计约 330 KB Flash（1bpp 未压缩），只读 Flash，不常驻内部 RAM。
+- 代价：三套字库合计约 363 KB Flash（12px 98 KB、24px 264 KB、36px 1 KB；
+  1bpp 未压缩），只读 Flash，不常驻内部 RAM。其中新增的 172 个一级字约占 17 KB。
 - 其他字号请另行生成并登记,不要为了补一个字改用整套 CJK 字库。
 
 ### ark12-subset.woff2（后台网页用的同款像素字体）

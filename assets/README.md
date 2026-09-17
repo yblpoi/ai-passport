@@ -27,24 +27,37 @@ pixel heart wallpaper. Only these three sizes are allowed.
     settings rows
   - `fonts/love_font_24.c` — main text: title, person names, event names
   - `fonts/love_font_36.c` — digits and `+-.:/%` only, used for the big day count
-- Source and license: **Ark Pixel Font** 12 px size, Simplified Chinese (zh_cn),
-  proportional; SIL Open Font License 1.1, shipped as `fonts/OFL-ark-pixel.txt`.
-  The repository commits only the generated files and the conversion command,
-  not the TTF.
+- Source and license: **Fusion Pixel Font** 12 px size, Simplified Chinese
+  (zh_hans), proportional — SIL Open Font License 1.1, shipped as
+  `fonts/OFL-fusion-pixel.txt`. Fusion Pixel Font is the Ark Pixel Font project's
+  own transitional build: it takes Ark Pixel as the base glyphs and metrics and
+  fills the gaps from other same-size pixel fonts. `fonts/OFL-ark-pixel.txt` is
+  kept because the Ark Pixel glyphs it is built from are still what gets
+  rendered. The repository commits only the generated files and the conversion
+  command, not the TTF.
+- Fusion Pixel Font release used: `2026.09.01`,
+  `fusion-pixel-font-12px-proportional-ttf-v2026.09.01.zip`, file
+  `fusion-pixel-12px-proportional-zh_hans.ttf`
+  (<https://github.com/TakWolf/fusion-pixel-font/releases>).
 - **Why only 12 / 24 / 36**: the font is hand-drawn on a fixed 12 px design grid.
   Only integer multiples (1×/2×/3×) keep every stroke on whole pixels. Measured
   `adv_w` and `box_w/h` scale exactly at 12/24/36/48; a non-integer factor makes
   stroke widths uneven and destroys the dot-matrix look. **Do not add a fourth
   size.**
-- Character range: ASCII 0x20–0x7E, common CJK punctuation, and GB2312 level-1
-  Han characters, intersected with the font's own cmap — 3718 characters land
-  (the font lacks 175 level-1 characters, mostly rare ones). Missing glyphs fall
-  back to Montserrat, so a rare character in a person's name may look wrong.
+- Character range: ASCII 0x20–0x7E, common CJK punctuation, and the complete
+  GB2312 level-1 Han set — **3890 characters**. An earlier build took the font
+  straight from Ark Pixel Font, whose cmap is missing 172 level-1 characters,
+  including everyday ones such as the characters for "hot", "execute", "love",
+  "fate", "however", "window", "tight", "police" and "medicine". Those had no
+  glyph anywhere, so LVGL drew placeholder boxes; a custom name containing one
+  would have shown a box too. Regenerating from Fusion Pixel Font adds exactly
+  those 172 glyphs and leaves all 3718 existing glyphs byte-identical, so no text
+  moved or changed shape.
 - Conversion command (repository root, `lv_font_conv` 1.5.3):
 
   ```bash
   lv_font_conv \
-    --font <ark-pixel-12px-proportional-zh_cn.ttf> \
+    --font <fusion-pixel-12px-proportional-zh_hans.ttf> \
     --symbols "<character set>" \
     --size 24 --bpp 1 --format lvgl --no-compress \
     --lv-font-name love_font_24 --lv-include lvgl.h \
@@ -61,8 +74,9 @@ pixel heart wallpaper. Only these three sizes are allowed.
   through `target_sources` in `main/CMakeLists.txt`. The application uses
   `LV_FONT_DECLARE` and keeps writable copies whose fallback points at Montserrat
   to cover missing glyphs and LVGL symbols.
-- Cost: about 330 KB of Flash altogether (1 bpp, uncompressed), read-only, not
-  resident in internal RAM.
+- Cost: about 363 KB of Flash altogether (12 px 98 KB, 24 px 264 KB, 36 px 1 KB;
+  1 bpp, uncompressed), read-only, not resident in internal RAM. The 172 added
+  level-1 glyphs account for roughly 17 KB of that.
 - Generate and register additional sizes separately instead of switching to a
   full CJK family to add a single character.
 

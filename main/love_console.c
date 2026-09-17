@@ -12,7 +12,9 @@
 #include "love_app.h"
 #include "love_ble.h"
 #include "love_console_line.h"
+#include "love_event_order.h"
 #include "love_net.h"
+#include "love_store.h"
 #include "love_time.h"
 
 #include "esp_console.h"
@@ -197,6 +199,38 @@ static int cmd_time(void *ctx, int argc, char **argv)
     return 0;
 }
 
+// 列表屏的显示序。设备屏幕上看不出"为什么是这个顺序",改完分类或网页上的顺序后
+// 敲 status 就能核对分组与组内排序 —— 列表屏的分页/光标/翻卡都建在这个顺序上,
+// 顺序错了整屏都是错的。
+static void print_event_order(void)
+{
+    love_config_t cfg;
+    love_store_load_config(&cfg);
+    if (cfg.event_count == 0) return;
+
+    love_time_state_t state;
+    love_time_get(&state);
+    love_date_t today = { 0, 0, 0 };
+    const bool holds = state.holds;
+    if (holds) today = love_date_from_epoch(state.epoch_seconds, LOVE_TZ_OFFSET_SECONDS);
+
+    uint8_t order[LOVE_EVENT_MAX];
+    const size_t count = love_event_order_build(cfg.events, cfg.event_count, today, holds,
+                                                order, sizeof(order));
+    if (count == 0) return;
+
+    love_console_out("模式  %s\n", cfg.display_mode == LOVE_DISPLAY_LIST ? "列表" : "单页");
+
+    char line[OUT_MAX];
+    int used = snprintf(line, sizeof(line), "列表序");
+    for (size_t i = 0; i < count && used > 0 && used < (int)sizeof(line); i++) {
+        const love_event_t *event = &cfg.events[order[i]];
+        used += snprintf(line + used, sizeof(line) - (size_t)used, " %s[%s]",
+                         event->name, event->category[0] ? event->category : "未分类");
+    }
+    love_console_out("%s\n", line);
+}
+
 static int cmd_status(void *ctx, int argc, char **argv)
 {
     (void)ctx;
@@ -228,6 +262,8 @@ static int cmd_status(void *ctx, int argc, char **argv)
 
     const size_t headroom = love_ble_host_stack_headroom();
     if (headroom > 0) love_console_out("蓝牙栈余 %u 字节\n", (unsigned)headroom);
+
+    print_event_order();
     return 0;
 }
 

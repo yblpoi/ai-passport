@@ -5,6 +5,7 @@ idf_component_register(
          "power_sleep.c"
          "love_app.c"
          "love_date.c"
+         "love_event_order.c"
          "love_config.c"
          "love_lunar.c"
          "love_store.c"

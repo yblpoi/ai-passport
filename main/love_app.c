@@ -9,6 +9,7 @@
 #include "love_ble.h"
 #include "love_console.h"
 #include "love_date.h"
+#include "love_event_order.h"
 #include "love_httpd.h"
 #include "love_lunar.h"
 #include "love_net.h"
@@ -54,8 +55,17 @@ static const char *TAG = "love_app";
 #define VIEW_MAIN     0
 #define VIEW_SETTINGS (-1)
 #define VIEW_STATUS   (-2)
+// 事件列表屏(分页,一屏 4 条)。也是负数,所以**不能**再用 s_view ± 1 在视图之间跳:
+// -3 加一会串到 VIEW_STATUS(-2) 去。按键一律走显式分支。
+#define VIEW_LIST     (-3)
 
 #define SETTINGS_ROWS 9
+
+// 列表屏一屏几行。行高 50,首行从 y=42 起,末行底部 42+3*50+48=240,
+// 提示行在 y≈302,不会打架。
+#define LIST_PAGE_ROWS 4
+#define LIST_ROW_TOP   42
+#define LIST_ROW_PITCH 50
 
 // 本机状态页:上面九行信息(含最近一次休眠结果),下面三项操作。
 #define STATUS_INFO_ROWS    9
@@ -95,6 +105,10 @@ static love_config_t s_cfg;
 static int s_view = VIEW_MAIN;
 static int s_edit_field = -1;
 static int s_sel;
+// 列表屏的显示序:s_order[i] 是 s_cfg.events 的下标,顺序由 love_event_order 决定。
+// 它随"今天"变化(组内按远近排),所以每次进列表或重绘前都重算一次,8 条最多。
+static uint8_t s_order[LOVE_EVENT_MAX];
+static int s_order_count;
 static bool s_services_ready;
 static bool s_store_ready;
 static int s_last_day = -1;
@@ -664,6 +678,134 @@ static void handle_status_key(bsp_btn_t btn, bsp_btn_ev_t ev, action_t *action)
 
 /* ---------- 渲染 ---------- */
 
+/* ---------- 列表屏 ---------- */
+
+// 重算显示序。分组不需要时间,组内按远近排序需要,所以 holds 为 false 时只有分组生效。
+static void rebuild_order(love_date_t today, bool holds)
+{
+    s_order_count = (int)love_event_order_build(s_cfg.events, s_cfg.event_count,
+                                                today, holds, s_order, sizeof(s_order));
+}
+
+// 某条事件在显示序里的位置;不在其中时返回 -1。
+static int order_position(int raw_index)
+{
+    for (int i = 0; i < s_order_count; i++) {
+        if (s_order[i] == raw_index) return i;
+    }
+    return -1;
+}
+
+// 列表右列的天数文案。算不出来(没对时 / 农历超表)写 "--",与事件卡的说法一致,
+// 不拿 0 冒充"就是今天"。
+static void format_row_days(char *out, size_t size, const love_event_t *event,
+                            love_date_t today, bool holds)
+{
+    if (!holds) {
+        snprintf(out, size, "--");
+        return;
+    }
+    const love_countdown_t countdown = love_event_countdown(event, today);
+    if (!countdown.resolved) {
+        snprintf(out, size, "--");
+    } else if (countdown.upcoming) {
+        snprintf(out, size, "%d 天", (int)countdown.days);
+    } else {
+        snprintf(out, size, "%d 天前", (int)(-countdown.days));
+    }
+}
+
+// 分类标签底块的宽度:一个汉字 12px、一个 ASCII 字符 6px,再加左右各 3px 内边距。
+// UTF-8 的续字节不再重复计宽。夹在 [16,100],超长交给 CLIP。
+static int category_width(const char *text)
+{
+    int width = 6;
+    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+        if ((*p & 0xC0) == 0x80) continue;   // 续字节
+        width += (*p >= 0x80) ? 12 : 6;
+    }
+    if (width < 16) return 16;
+    if (width > 100) return 100;
+    return width;
+}
+
+// 进列表屏。from_end 为 true 时把光标放到最后一条(主屏按上键进来的路径)。
+static void enter_list(bool from_end)
+{
+    love_date_t today = { 0, 0, 0 };
+    const bool holds = time_today(&today);
+    rebuild_order(today, holds);
+
+    s_sel = (from_end && s_order_count > 0) ? s_order_count - 1 : 0;
+    s_view = VIEW_LIST;
+    s_note[0] = '\0';
+    render();
+}
+
+// 卡片上/下翻页。列表模式下顺序跟着列表走,走到头回列表;单页模式维持改造前的环形。
+static void move_card(int delta)
+{
+    if (s_cfg.display_mode == LOVE_DISPLAY_LIST) {
+        love_date_t today = { 0, 0, 0 };
+        const bool holds = time_today(&today);
+        rebuild_order(today, holds);
+
+        const int pos = order_position(s_view - 1);
+        if (pos >= 0) {
+            const int next = pos + delta;
+            if (next < 0 || next >= s_order_count) {
+                // 越过两端就回列表,光标停在刚才看的那条上,接着选。
+                s_sel = pos;
+                s_view = VIEW_LIST;
+            } else {
+                s_view = s_order[next] + 1;
+            }
+        }
+    } else {
+        const int count = (int)s_cfg.event_count;
+        if (delta > 0) s_view = (s_view >= count) ? VIEW_MAIN : s_view + 1;
+        else s_view = (s_view <= VIEW_MAIN) ? count : s_view - 1;
+        if (s_view < 0) s_view = VIEW_MAIN;   // 一条事件都没有
+    }
+    s_note[0] = '\0';
+    render();
+}
+
+static void handle_list_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+{
+    love_date_t today = { 0, 0, 0 };
+    const bool holds = time_today(&today);
+    rebuild_order(today, holds);
+
+    // 事件可能在别处被删光(后台网页),回主屏而不是停在一张空列表上。
+    if (s_order_count == 0) {
+        s_view = VIEW_MAIN;
+        s_note[0] = '\0';
+        render();
+        return;
+    }
+    if (s_sel >= s_order_count) s_sel = s_order_count - 1;
+    if (s_sel < 0) s_sel = 0;
+
+    if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
+        s_sel = (s_sel <= 0) ? s_order_count - 1 : s_sel - 1;
+        render();
+    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
+        s_sel = (s_sel + 1 >= s_order_count) ? 0 : s_sel + 1;
+        render();
+    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
+        // 打开这一条的单页卡。s_view 用"原下标 + 1"编码,与主屏 0 不冲突。
+        s_view = s_order[s_sel] + 1;
+        s_note[0] = '\0';
+        render();
+    } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+        s_sel = 0;
+        s_view = VIEW_SETTINGS;
+        s_note[0] = '\0';
+        render();
+    }
+}
+
 static void render(void)
 {
     // 这几行文字/图标都是"建好即用",不进 refresh_dynamic,所以做成局部变量。
@@ -732,6 +874,65 @@ static void render(void)
         return;
     }
 
+    if (s_view == VIEW_LIST) {
+        rebuild_order(today, holds);
+
+        const int pages = (s_order_count + LIST_PAGE_ROWS - 1) / LIST_PAGE_ROWS;
+        const int page = s_sel / LIST_PAGE_ROWS + 1;
+        s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
+        lv_label_set_text_fmt(s_page, "%d/%d", page, pages > 0 ? pages : 1);
+        lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
+
+        const int first = (page - 1) * LIST_PAGE_ROWS;
+        for (int row = 0; row < LIST_PAGE_ROWS; row++) {
+            const int pos = first + row;
+            if (pos >= s_order_count) break;
+
+            const love_event_t *event = &s_cfg.events[s_order[pos]];
+            const int row_top = LIST_ROW_TOP + row * LIST_ROW_PITCH;
+            const bool selected = (pos == s_sel);
+
+            // 选中块先铺,行内文字再按选中状态换色压在上面。
+            if (selected) ui_pixel_block(s_scr, 10, row_top - 3, 220, 48, COL_WHITE);
+
+            lv_obj_t *icon = lv_image_create(s_scr);
+            lv_image_set_src(icon, resolve_icon(event->icon));
+            lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 12, row_top + 2);
+
+            const bool has_category = event->category[0] != '\0';
+            if (has_category) {
+                const int cat_w = category_width(event->category);
+                // 选中行的底色本来就是白的,再铺一块白标签等于没画,只在未选中时铺。
+                if (!selected) ui_pixel_block(s_scr, 60, row_top + 3, cat_w, 15, COL_WHITE);
+                lv_obj_t *cat = cjk_small(s_scr, event->category, COL_INK);
+                lv_label_set_long_mode(cat, LV_LABEL_LONG_CLIP);
+                lv_obj_set_width(cat, cat_w - 6);
+                lv_obj_align(cat, LV_ALIGN_TOP_LEFT, 63, row_top + 5);
+            }
+
+            lv_obj_t *name = cjk_label(s_scr, event->name,
+                                       selected ? COL_INK : COL_WHITE);
+            lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
+            // 宽度**不能**铺到右列去:24px 的名字会压在右对齐的天数文案上。
+            // 120 让名字止于 x=180,最宽的天数文案("3 天前"约 40px)从 x≈188 起。
+            lv_obj_set_width(name, 120);
+            // 有分类时给分类标签让出一行,没有就整行居中一点。
+            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 60, has_category ? row_top + 19 : row_top + 7);
+
+            // 24 字节:最坏情况是 int 的 11 位数字 + " 天前"(7 字节) + 结尾。
+            // 实际日期被夹在 1970..2099,最多 5 位数。
+            char days[24];
+            format_row_days(days, sizeof(days), event, today, holds);
+            lv_obj_t *day = cjk_small(s_scr, days, selected ? COL_INK : COL_WHITE);
+            lv_obj_align(day, LV_ALIGN_TOP_RIGHT, -12, row_top + 23);
+        }
+
+        hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 打开 · 长按设置", COL_WHITE);
+        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
+        lv_screen_load(s_scr);
+        return;
+    }
+
     if (s_view == VIEW_MAIN || s_cfg.event_count == 0) {
         // 两个人像移到标题上方并放大(40px 图标 + 24px 名字),人物先出场。
         // 这一屏的纵向坐标:上方要避开右上角电量(它占到 y=18),下方要留出提示行,
@@ -777,7 +978,11 @@ static void render(void)
         date_obj = cjk_small(s_scr, text, COL_WHITE);
         lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 250);
 
-        hint_obj = cjk_small(s_scr, "上/下 切换 · 长按确定 设置", COL_WHITE);
+        // 列表模式下上/下是"进列表",提示要跟着改,否则用户按下去会以为走错了屏。
+        hint_obj = cjk_small(s_scr, s_cfg.display_mode == LOVE_DISPLAY_LIST
+                                       ? "上/下 列表 · 长按确定 设置"
+                                       : "上/下 切换 · 长按确定 设置",
+                             COL_WHITE);
         lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
         lv_screen_load(s_scr);
         return;
@@ -1045,6 +1250,8 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         handle_settings_key(btn, ev, &action);
     } else if (s_view == VIEW_STATUS) {
         handle_status_key(btn, ev, &action);
+    } else if (s_view == VIEW_LIST) {
+        handle_list_key(btn, ev);
     } else if (s_edit_field >= 0) {
         // 编辑模式:上键 +1、下键换字段、确定键保存。
         // 农历事件的月日走 love_lunar_step：农历月长不是公历的 28/30/31。
@@ -1080,23 +1287,52 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             set_note("已放弃修改");
             render();
         }
-    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
-        s_view = (s_view >= (int)s_cfg.event_count) ? VIEW_MAIN : s_view + 1;
-        s_note[0] = '\0';
-        render();
-    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
-        s_view = (s_view <= VIEW_MAIN) ? (int)s_cfg.event_count : s_view - 1;
-        s_note[0] = '\0';
-        render();
-    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
-        s_edit_field = 0;
-        set_note("");
-        render();
-    } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-        s_sel = 0;
-        s_view = VIEW_SETTINGS;
-        s_note[0] = '\0';
-        render();
+    } else if (s_view == VIEW_MAIN) {
+        // 主屏。列表模式:上/下进列表(下键从头、上键从尾);单页模式:维持改造前的
+        // 主屏 ↔ 事件卡环形,不进列表。
+        const bool list_mode = (s_cfg.display_mode == LOVE_DISPLAY_LIST);
+        if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
+            if (list_mode) {
+                enter_list(false);
+            } else {
+                s_view = (s_cfg.event_count > 0) ? 1 : VIEW_MAIN;
+                s_note[0] = '\0';
+                render();
+            }
+        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
+            if (list_mode) {
+                enter_list(true);
+            } else {
+                s_view = (int)s_cfg.event_count;   // 一条也没有时就是主屏自己
+                s_note[0] = '\0';
+                render();
+            }
+        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
+            s_edit_field = 0;
+            set_note("");
+            render();
+        } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+            s_sel = 0;
+            s_view = VIEW_SETTINGS;
+            s_note[0] = '\0';
+            render();
+        }
+    } else {
+        // 事件卡(s_view 是"原下标 + 1")。
+        if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
+            move_card(1);
+        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
+            move_card(-1);
+        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
+            s_edit_field = 0;
+            set_note("");
+            render();
+        } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+            s_sel = 0;
+            s_view = VIEW_SETTINGS;
+            s_note[0] = '\0';
+            render();
+        }
     }
     bsp_lvgl_unlock();
 

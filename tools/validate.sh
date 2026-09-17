@@ -45,6 +45,9 @@ run_static_checks() (
     run_host_test test_love_config main main/love_config.c main/love_date.c main/love_lunar.c
     # love_date.c 的农历事件会调 love_lunar,所以两个测试都要带上 love_lunar.c。
     run_host_test test_love_date main main/love_date.c main/love_lunar.c
+    # 列表屏的显示序:分组、组序、组内排序与"农历超表排最后"都在这里钉住。
+    run_host_test test_love_event_order main \
+        main/love_event_order.c main/love_date.c main/love_lunar.c
     # 农历换算依赖 tools/gen_lunar_table.py 生成的表,同样按纯逻辑测。
     run_host_test test_love_lunar main main/love_lunar.c main/love_date.c
     run_host_test test_bsp_display_rounding components/bsp/src \

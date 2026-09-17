@@ -18,11 +18,11 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # --- LVGL ---
+# 界面大数字用的是像素字体 love_font_36(main/love_app.c),Montserrat 只用于
+# 纯 ASCII 的 demo 页与像素字体的 fallback,所以只开 14/20 两档。
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
-# 恋爱倒计时的天数用 32 号数字,Montserrat 32 只增加少量点阵数据。
-CONFIG_LV_FONT_MONTSERRAT_32=y
 # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
 # demo UI 简单,24KB 够用;恋爱倒计时的页面对象更多(底纹+图标+多人卡片),
 # 调到 32KB 留出余量,避免绘制时池耗尽。
@@ -30,6 +30,12 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=32
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
+
+# --- 编译器 ---
+# 按体积优化(-Os)。ESP-IDF 默认按调试优化(-Og),会让 app 镜像明显偏大;
+# 本项目的瓶颈在 SPI 刷屏与 I2S DMA,不在 CPU,所以 -Os 不会影响观感与时序。
+# 断言级别保持默认(ENABLE),不要改成 DISABLE —— 那会把 assert() 变成空操作。
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
 # --- SNTP ---
 # 设备没有 RTC，时间只能靠网络拿回来，所以配两个服务器做容错。

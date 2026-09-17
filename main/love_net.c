@@ -64,10 +64,15 @@ static void build_ap_identity(char *ssid, size_t ssid_size, char *pass, size_t p
 static void apply_mode(void)
 {
     wifi_mode_t mode = WIFI_MODE_NULL;
-    if (s_ap_requested && s_sta_ssid[0] != '\0') {
+    if (s_ap_requested) {
+        // 热点开着时一律用 APSTA,即使还没配网。
+        //
+        // 纯 AP 模式下 STA 接口不在场,esp_wifi_scan_start() 会直接失败
+        // (实测返回 ESP_FAIL),而后台的"扫描附近 Wi-Fi"正是未配网时唯一的
+        // 选网入口 —— 最需要它的场景恰好用不了。STA 这边没有凭据时不会连接
+        // (connect_sta() 见 s_sta_ssid 为空即返回),代价只是扫描那 1~2 秒
+        // 射频会离开服务信道,已连上的客户端可能感知到一次短暂中断。
         mode = WIFI_MODE_APSTA;
-    } else if (s_ap_requested) {
-        mode = WIFI_MODE_AP;
     } else if (s_sta_ssid[0] != '\0') {
         mode = WIFI_MODE_STA;
     }

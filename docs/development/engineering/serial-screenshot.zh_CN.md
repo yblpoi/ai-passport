@@ -66,11 +66,26 @@ python3 tools/screenshot.py --raw dump.bin  # 另外留一份原始像素
 `shot`,每一屏都能从脚本里验:
 
 ```bash
-python3 tools/screenshot.py -o main.png
-printf 'key down\n' | python3 -c '...'      # 或者直接用串口终端敲
-python3 tools/screenshot.py -o list.png
+python3 tools/screenshot.py --keys down,down,down -o /tmp/shots
+```
+
+`--keys` 在**同一次串口会话**里依次翻页,写出 `00-start.png`、`01-down.png` 这样一串。
+
+**必须在同一次会话里做。** 打开串口会复位芯片,而"停在哪一页"是内存里的状态 ——
+一屏跑一次 `tools/screenshot.py`,每次都会被复位回主屏,后面几张图悄悄停在错的页上。
+用 `--keys`,或者自己保持一个 `serial.Serial` 开着。
+
+翻页顺序:主屏按"下"先走各张单页事件卡,再走列表屏各页,最后一页再按"下"回主屏;
+"上"反过来。屏幕上的页码是**整套轮播**的编号(单页卡与列表页共用一套)。
+`status` 会报当前屏与页码(`界面  单页卡「咕咕嘎嘎」(轮播第 1/3 页)`),
+一次翻页序列可以完全不截图就核对完:
+
+```bash
+key down
+status          # 界面  列表页(列表组第 1/2 页,轮播第 2/3 页)
 ```
 
 注意:设备要插着 USB(像素走串口,蓝牙通知那条路太慢);打开串口时驱动会把开机
 时滞留在环形缓冲里的日志回放出来,先读掉再信后面的输出;`key` 是在控制台任务上渲染
 的,余量不大 —— 真实按键走的是 esp_timer 任务(3584 字节),那才是常规路径。
+熄屏状态下注入的按键只负责亮屏(这是产品规则),所以翻页前先 `debug on`。

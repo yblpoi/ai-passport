@@ -81,13 +81,28 @@ a real press. Together with `shot` this makes every screen verifiable from a
 script:
 
 ```bash
-python3 tools/screenshot.py -o main.png
-printf 'key down\n' | python3 -c '...'      # or a serial terminal
-python3 tools/screenshot.py -o list.png
+python3 tools/screenshot.py --keys down,down,down -o /tmp/shots
 ```
+
+`--keys` walks the pages in **one serial session** and writes `00-start.png`,
+`01-down.png`, … .
+
+**It has to be one session.** Opening the port resets the chip, and which page the
+device is on lives in RAM — running `tools/screenshot.py` once per screen resets
+you back to the home screen every time, so the later shots silently show the wrong
+page. Use `--keys`, or keep a single `serial.Serial` open yourself.
+
+Paging on this firmware: `down` from the home screen walks the single-page event
+cards first, then the list pages, then back to the home screen; `up` goes the other
+way. The page number on screen counts the whole carousel — single-page cards and
+list pages share one numbering. `status` reports the current screen and page on one
+line (the device prints that line in Chinese, see the linked Chinese document),
+which checks a whole walk without taking any screenshots at all.
 
 Notes: the device must be on USB (the pixels go over the serial console, and
 Bluetooth notifications would be far too slow); opening the port replays whatever
 the driver still holds from boot, so read past that before trusting the output;
 and `key` renders on the console task, which leaves it with little headroom —
-the real buttons render on the esp_timer task instead (3584 bytes).
+the real buttons render on the esp_timer task instead (3584 bytes). A key injected
+while the screen is blanked only wakes the screen (that is the product rule), so
+turn on `debug on` before walking pages.

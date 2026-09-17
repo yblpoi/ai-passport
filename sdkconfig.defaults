@@ -110,3 +110,19 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
 CONFIG_BT_NIMBLE_NVS_PERSIST=n
+
+# BLE 一旦打开就吃掉约 65 KB 堆(实测:79,212 → 12,784 字节),而本机只要
+# "广播 + 一条连接 + 一次 8 字节写入 + 一小段读"这点流量 —— 默认的缓冲池是按
+# 多连接、批量吞吐给的,严重超配。下面几项把它收到够用:
+#   MSYS_2 是主机侧待发 ACL 数据,24×320B → 8×320B
+#   ACL_FROM_LL 是从控制器上行的 ACL 缓冲,24×255B → 8×255B
+#   EVT 是控制器事件缓冲,30×70B → 12×70B
+# 省下来的堆直接决定"蓝牙开着时后台网页还能不能传大文件"。
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=8
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=8
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=12
+
+# 控制器侧:6 个并发 BLE 活动我们只用得上 2 个(一个广播集 + 一条连接);
+# 100 个广播上报缓冲是给扫描用的,而设备从不做 BLE 扫描(附近 Wi-Fi 扫描走的是 Wi-Fi)。
+CONFIG_BT_CTRL_BLE_MAX_ACT=2
+CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM=10

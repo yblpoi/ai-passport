@@ -11,9 +11,10 @@ idf_component_register(
          "love_net.c"
          "love_ble.c"
          "love_httpd.c"
+         "love_console.c"
     INCLUDE_DIRS "."
     # esp_app_format 提供 esp_app_desc.h,本机状态页要读固件版本号。
-    REQUIRES bsp bt esp_app_format esp_event esp_hw_support esp_http_server esp_netif esp_timer esp_wifi json nvs_flash
+    REQUIRES bsp bt console esp_app_format esp_event esp_hw_support esp_http_server esp_netif esp_timer esp_wifi json nvs_flash
 )
 
 # 生成的素材:像素字库(assets/fonts/)与像素图标、爱心底纹、调色板(assets/images/)。

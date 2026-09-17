@@ -57,3 +57,25 @@ unavailable-network failures, reconnect/restart behavior, credential clearing,
 repeated entry/exit, and an actual application network request. Build success
 does not prove mini program compatibility or on-device networking; keep
 unperformed checks under `Unverified`.
+
+## Provisioning entry points in this application
+
+This application ships two independent ways to set the Wi-Fi credentials, plus
+Bluetooth for time only. None of them replaces another.
+
+| Entry | How | Notes |
+| --- | --- | --- |
+| USB serial console | `wifi <ssid> <password>` | `main/love_console.c`, on the USB-Serial-JTAG console. The only entry that works when the device is not reachable on any network, which is exactly the state a misconfigured device is in. |
+| Admin web page | Network and hotspot card | `main/love_httpd.c`, served over the device's own hotspot. That hotspot only opens while the device has no saved credentials. |
+| Bluetooth LE | time sync only | `main/love_ble.c` carries a Unix timestamp on service A001. It does not carry credentials. |
+
+Both credential paths converge on `love_net_set_credentials()` and
+`love_net_forget()` in `main/love_net.c`, so there is one credential path and one
+NVS record. From the console, `wifi` with no arguments prints the current state,
+`wifi open <ssid>` joins an open network, and `wifi clear` forgets the
+credentials and reopens the hotspot.
+
+The console never logs the password and never reads it back: `love_store_load_wifi()`
+is the only reader and the network layer is the only caller. The console parser
+splits arguments on spaces, so an SSID or password containing a space has to be
+entered from the web page instead.

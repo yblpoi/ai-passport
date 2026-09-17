@@ -55,6 +55,9 @@ esp_err_t love_net_forget(void);
 
 void love_net_get_status(love_net_status_t *out);
 
+// 网络状态的中文文案(后台网页与控制台共用同一套,别各写一份)。
+const char *love_net_state_text(love_net_state_t state);
+
 // 扫描:触发后由调用方轮询 love_net_scan_results。
 esp_err_t love_net_scan_start(void);
 bool love_net_scan_pending(void);

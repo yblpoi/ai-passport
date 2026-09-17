@@ -7,6 +7,7 @@
 #include "bsp_battery.h"
 #include "bsp_display.h"
 #include "love_ble.h"
+#include "love_console.h"
 #include "love_date.h"
 #include "love_httpd.h"
 #include "love_lunar.h"
@@ -1195,6 +1196,10 @@ esp_err_t love_app_start(void)
     }
     if (love_ble_start() != ESP_OK) {
         ESP_LOGW(TAG, "BLE 对时服务启动失败");
+    }
+    // 串口配网:插着 USB 时不用连热点也能配网。失败只少一条入口,不影响其它功能。
+    if (love_console_start() != ESP_OK) {
+        ESP_LOGW(TAG, "USB 串口控制台启动失败,仍可用后台网页或 BLE 配网");
     }
 
     // 最大连续块和剩余总量一样重要:Wi-Fi 驱动发一帧要一块 ~1600 字节的连续内存,

@@ -373,6 +373,18 @@ esp_err_t love_net_forget(void)
     return love_net_ap_start();
 }
 
+const char *love_net_state_text(love_net_state_t state)
+{
+    switch (state) {
+    case LOVE_NET_OFF:        return "未启动";
+    case LOVE_NET_IDLE:       return "未联网";
+    case LOVE_NET_CONNECTING: return "连接中";
+    case LOVE_NET_CONNECTED:  return "已联网";
+    case LOVE_NET_FAILED:     return "连接失败";
+    default:                  return "未知";
+    }
+}
+
 void love_net_get_status(love_net_status_t *out)
 {
     if (!out) return;

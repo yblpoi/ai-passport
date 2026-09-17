@@ -192,18 +192,6 @@ static cJSON *config_to_json(const love_config_t *cfg)
     return root;
 }
 
-static const char *net_state_text(love_net_state_t state)
-{
-    switch (state) {
-    case LOVE_NET_OFF:        return "未启动";
-    case LOVE_NET_IDLE:       return "未联网";
-    case LOVE_NET_CONNECTING: return "连接中";
-    case LOVE_NET_CONNECTED:  return "已联网";
-    case LOVE_NET_FAILED:     return "连接失败";
-    default:                  return "未知";
-    }
-}
-
 static cJSON *state_to_json(void)
 {
     love_config_t cfg;
@@ -234,7 +222,7 @@ static cJSON *state_to_json(void)
     cJSON *net_json = cJSON_AddObjectToObject(root, "net");
     cJSON_AddStringToObject(net_json, "state", net.state == LOVE_NET_CONNECTED ? "connected" :
                                              (net.state == LOVE_NET_CONNECTING ? "connecting" : "idle"));
-    cJSON_AddStringToObject(net_json, "stateText", net_state_text(net.state));
+    cJSON_AddStringToObject(net_json, "stateText", love_net_state_text(net.state));
     cJSON_AddBoolToObject(net_json, "ap", net.ap_active);
     cJSON_AddStringToObject(net_json, "ip", net.ip);
     cJSON_AddNumberToObject(net_json, "rssi", net.rssi);

@@ -97,10 +97,11 @@ The 128-bit UUID is deliberately kept out of the advertising packet: the 31-byte
 packet cannot hold the flags, the device name and a 128-bit UUID, and
 `ble_gap_adv_set_fields()` returns `EMSGSIZE` when it does not fit.
 
-Available commands: `help`, `status` (time, network, Bluetooth, memory), `wifi …`,
-`time <unix seconds>` to set the clock, and `ble on` / `ble off`. Once a phone has
-connected and subscribed to notifications, the device pushes the output of `help`
-to it automatically.
+Available commands: `help`, `status` (time, network, Bluetooth, memory and the
+event order), `wifi …`, `time <unix seconds>` to set the clock, `ble on` / `ble off`,
+and the USB-only `shot` (see [serial-screenshot.md](serial-screenshot.md)) plus the
+debug `key` that injects a button press. Once a phone has connected and subscribed
+to notifications, the device pushes the output of `help` to it automatically.
 
 #### Connecting from a computer
 

@@ -85,8 +85,9 @@ demo，也不要用该分支的旧版 BSP、分区表或配置覆盖当前版本
 128 位 UUID **刻意不放进广播包**：31 字节的广播包装不下 flags、设备名和一个
 128 位 UUID，硬塞会让 `ble_gap_adv_set_fields()` 返回 `EMSGSIZE`。
 
-可用命令：`help`、`status`（时间/网络/蓝牙/内存）、`wifi …`、`time <Unix 秒>` 对时、
-`ble on` / `ble off`。手机连上并订阅通知后，设备会自动把 `help` 的输出推过去。
+可用命令：`help`、`status`（时间/网络/蓝牙/内存与事件显示序）、`wifi …`、`time <Unix 秒>`
+对时、`ble on` / `ble off`；另有只能走 USB 的 `shot`（见 [serial-screenshot.zh_CN.md](serial-screenshot.zh_CN.md)）
+与调试用的 `key`（注入一次按键）。手机连上并订阅通知后，设备会自动把 `help` 的输出推过去。
 
 #### 从电脑上连
 

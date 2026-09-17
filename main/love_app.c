@@ -513,11 +513,12 @@ static void render(void)
         if (s_sel < 0) s_sel = 0;
 
         lv_obj_t *title = cjk_label(s_scr, "设置", COL_WHITE);
-        lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 6);
+        lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 30);
 
         // 12px 字号下一行只要 22px,9 行也放得下,不必分页。
+        // 起始 y 调低过:原来从 32 起,整块贴在顶部,底部空出一大截看着头重脚轻。
         for (int i = 0; i < count; i++) {
-            int y = 32 + i * 24;
+            int y = 56 + i * 24;
             bool selected = i == s_sel;
             if (selected) ui_pixel_block(s_scr, 10, y - 4, 220, 22, COL_WHITE);
             lv_obj_t *label = cjk_small(s_scr, rows[i].label,
@@ -528,7 +529,9 @@ static void render(void)
             lv_obj_align(value, LV_ALIGN_TOP_RIGHT, -16, y);
         }
 
-        hint_obj = cjk_label(s_scr, "上/下 选择 · 确定 执行", COL_WHITE);
+        // 提示行与主屏/事件卡一致用 12px;这里原先误用了 24px 的 cjk_label,
+        // 既是其它屏的两倍大,整行也几乎铺满 240px 屏宽。
+        hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 执行", COL_WHITE);
         lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
         lv_screen_load(s_scr);
         return;
@@ -536,10 +539,12 @@ static void render(void)
 
     if (s_view == VIEW_MAIN || s_cfg.event_count == 0) {
         // 两个人像移到标题上方并放大(40px 图标 + 24px 名字),人物先出场。
+        // 这一屏的纵向坐标:上方要避开右上角电量(它占到 y=18),下方要留出提示行,
+        // 整块下移到 y=56 起才既离电量够远、上下留白也均衡。改动时这几个值要一起动。
         const int CENTERS[LOVE_PERSON_MAX] = { 62, 178 };
         for (int i = 0; i < LOVE_PERSON_MAX; i++) {
             lv_obj_t *person = ui_pixel_plain(s_scr);
-            lv_obj_set_pos(person, CENTERS[i] - 48, 34);
+            lv_obj_set_pos(person, CENTERS[i] - 48, 56);
             lv_obj_set_size(person, 96, 100);
             lv_obj_set_style_bg_opa(person, LV_OPA_TRANSP, 0);
 
@@ -557,25 +562,25 @@ static void render(void)
         }
 
         lv_obj_t *title = cjk_label(s_scr, "在一起", COL_WHITE);
-        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 120);
+        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 142);
 
         int32_t days = 0;
         bool stale = false;
         bool have_days = main_days(&days, &stale);
-        add_big_number(s_scr, days, have_days, 158);
+        add_big_number(s_scr, days, have_days, 180);
 
         // 大数字下方是单位。实时的写「天」,用断电快照的写「天(未对时)」,
         // 完全没有可用值时写「未同步」—— 不拿旧数据冒充实时天数。
         const char *unit = !have_days ? "未同步" : (stale ? "天(未对时)" : "天");
         s_unit = cjk_small(s_scr, unit, COL_WHITE);
-        lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 196);
+        lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 218);
 
-        ui_pixel_block(s_scr, 60, 216, 120, 3, COL_SHADOW);
+        ui_pixel_block(s_scr, 60, 238, 120, 3, COL_SHADOW);
 
         char text[48];
         format_date_line(text, sizeof(text), "起始日", s_cfg.start);
         date_obj = cjk_small(s_scr, text, COL_WHITE);
-        lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 228);
+        lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 250);
 
         hint_obj = cjk_small(s_scr, "上/下 切换 · 长按确定 设置", COL_WHITE);
         lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
@@ -593,16 +598,18 @@ static void render(void)
     lv_label_set_text_fmt(s_page, "%d/%d", index + 1, (int)s_cfg.event_count);
     lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
 
+    // 这一屏的纵向坐标同样整块下移过:内容只占 166px,原来从 y=40 起,
+    // 底部空出近百像素。现在从 68 起,上下留白各约 68px,和主屏、设置页一致。
     icon_obj = lv_image_create(s_scr);
     lv_image_set_src(icon_obj, resolve_icon(event->icon));
-    lv_obj_align(icon_obj, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_align(icon_obj, LV_ALIGN_TOP_MID, 0, 68);
 
     name_obj = cjk_label(s_scr, event->name, COL_WHITE);
     lv_label_set_long_mode(name_obj, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(name_obj, 224);
     // 同主屏人像名:标签拉满宽度后必须显式居中,否则短名字会贴在左边。
     lv_obj_set_style_text_align(name_obj, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(name_obj, LV_ALIGN_TOP_MID, 0, 92);
+    lv_obj_align(name_obj, LV_ALIGN_TOP_MID, 0, 120);
 
     love_countdown_t countdown = { 0, true, true, event->date };
     if (holds) countdown = love_event_countdown(event, today);
@@ -612,19 +619,19 @@ static void render(void)
     const bool unresolved = holds && lunar && !countdown.resolved;
 
     add_big_number(s_scr, countdown.days >= 0 ? countdown.days : -countdown.days,
-                   holds && s_edit_field < 0 && !unresolved, 130);
+                   holds && s_edit_field < 0 && !unresolved, 158);
 
     const char *unit;
     if (!holds) unit = "未同步";
     else if (unresolved) unit = "农历超出范围";
     else unit = countdown.upcoming ? "天后" : "天前";
     s_unit = cjk_small(s_scr, unit, COL_WHITE);
-    lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 172);
+    lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 200);
 
     char date_text[48];
     format_event_line(date_text, sizeof(date_text), event, &countdown, unresolved);
     date_obj = cjk_small(s_scr, date_text, COL_WHITE);
-    lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 194);
+    lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 222);
 
     hint_obj = cjk_small(s_scr,
                          s_edit_field >= 0 ? "上+1 下换位 确定保存"

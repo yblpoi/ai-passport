@@ -33,5 +33,3 @@ int love_lunar_leap_month(int lunar_year);
 // 把农历月日写成"八月十五""腊月廿九"这类可读文本(UTF-8)。
 // 传 day = 0(月末)时写成"腊月最后一天"。buf 建议至少 32 字节。
 void love_lunar_format(int lunar_month, int lunar_day, char *buf, size_t size);
-
-// 农历月日的按键编辑:field 0 = 月(1..12 环绕),field 1 = 日(0..30 环绕,0 表示月末)。

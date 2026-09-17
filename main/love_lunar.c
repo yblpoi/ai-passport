@@ -130,12 +130,14 @@ static const char *const MONTH_NAMES[13] = {
     "七月", "八月", "九月", "十月", "冬月", "腊月",
 };
 
-static const char *const DAY_TENS[4] = { "初", "十", "廿", "三" };
+// 注意 "二十" 而不是 "廿":像素字库(Ark Pixel 子集)没有「廿」的字形,
+// 用「廿」会渲染成方框;而 format_day 里 day==20 本来就写作「二十」,这样也统一。
+static const char *const DAY_TENS[4] = { "初", "十", "二十", "三" };
 static const char *const DAY_UNITS[10] = {
     "十", "一", "二", "三", "四", "五", "六", "七", "八", "九",
 };
 
-// 农历日的中文写法:初一..初十、十一..十九、二十、廿一..廿九、三十
+// 农历日的中文写法:初一..初十、十一..十九、二十..二十九、三十
 static void format_day(int day, char *buf, size_t size)
 {
     if (day == 10) { snprintf(buf, size, "初十"); return; }
@@ -160,7 +162,9 @@ void love_lunar_format(int lunar_month, int lunar_day, char *buf, size_t size)
         return;
     }
 
-    char day[8];
+    // 最长是「二十二」这类:两位数的"二十"加一位数字,共 9 字节 + NUL。
+    // 原来是 8 字节,恰好卡着旧的「廿X」写法,换成「二十X」就会被截断成非法 UTF-8。
+    char day[12];
     format_day(lunar_day, day, sizeof(day));
     snprintf(buf, size, "%s%s", MONTH_NAMES[lunar_month], day);
 }

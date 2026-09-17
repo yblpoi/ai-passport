@@ -551,6 +551,8 @@ static void render(void)
             // 名字可能长到 8 个汉字,超出人物块宽度时裁切而不是换行,避免挤压下方排版。
             lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
             lv_obj_set_width(name, 96);
+            // 标签被拉满整块宽度,不显式居中就会左对齐,和上面居中的图标错开。
+            lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 46);
         }
 
@@ -598,6 +600,8 @@ static void render(void)
     name_obj = cjk_label(s_scr, event->name, COL_WHITE);
     lv_label_set_long_mode(name_obj, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(name_obj, 224);
+    // 同主屏人像名:标签拉满宽度后必须显式居中,否则短名字会贴在左边。
+    lv_obj_set_style_text_align(name_obj, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(name_obj, LV_ALIGN_TOP_MID, 0, 92);
 
     love_countdown_t countdown = { 0, true, true, event->date };

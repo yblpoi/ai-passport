@@ -141,8 +141,16 @@ static void test_format(void)
     love_lunar_format(12, 0, buf, sizeof(buf));
     assert(strcmp(buf, "腊月最后一天") == 0);
 
+    // 21..29 用「二十一..二十九」而不是「廿一..廿九」:像素字库没有「廿」的字形,
+    // 用「廿」设备上会画成方框。day==20 本来就写作「二十」,这样也统一。
     love_lunar_format(8, 22, buf, sizeof(buf));
-    assert(strcmp(buf, "八月廿二") == 0);
+    assert(strcmp(buf, "八月二十二") == 0);
+
+    love_lunar_format(8, 20, buf, sizeof(buf));
+    assert(strcmp(buf, "八月二十") == 0);
+
+    love_lunar_format(8, 29, buf, sizeof(buf));
+    assert(strcmp(buf, "八月二十九") == 0);
 
     love_lunar_format(8, 30, buf, sizeof(buf));
     assert(strcmp(buf, "八月三十") == 0);

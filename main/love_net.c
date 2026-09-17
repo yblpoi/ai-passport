@@ -253,7 +253,10 @@ esp_err_t love_net_init(void)
 
     // 凭据由本模块自己管理,不用 Wi-Fi 驱动的 NVS 存储。
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+    // 不省电。默认的 WIFI_PS_MIN_MODEM 会让射频按 DTIM 节拍才收发,后台网页有
+    // 21 万字节要传,实测吞吐掉到 3KB/s 量级,发送窗口打不开后 httpd 直接报
+    // "error in send : 11"(EAGAIN)并中断响应。设备是常电桌面摆件,省这点电不值当。
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     start_ap_profile();
 

@@ -267,11 +267,25 @@ static esp_err_t finish(httpd_req_t *req)
     return send_json(req, state_to_json(), NULL);
 }
 
+// 后台页接近 210KB,是全仓库最大的单个响应。不能用一次性 httpd_resp_send:
+// 它会在 httpd 任务里阻塞着把整个正文灌进 socket,一旦发送窗口一时排不空,
+// 就会撞上 config.send_wait_timeout(5 秒)被判定失败并直接断开连接 ——
+// 现象是浏览器/curl 报 "transfer closed with N bytes remaining to read",
+// 连头部都收到了、正文却一个字节都没有。
+// 改成 4KB 分块发送,每块之间让出 CPU 给协议栈,大响应才能稳定传完。
+#define PAGE_CHUNK_MAX 4096
+
 static esp_err_t handle_page(httpd_req_t *req)
 {
     love_net_ap_touch();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, LOVE_ADMIN_HTML, LOVE_ADMIN_HTML_SIZE);
+    for (size_t offset = 0; offset < LOVE_ADMIN_HTML_SIZE; offset += PAGE_CHUNK_MAX) {
+        size_t length = LOVE_ADMIN_HTML_SIZE - offset;
+        if (length > PAGE_CHUNK_MAX) length = PAGE_CHUNK_MAX;
+        esp_err_t err = httpd_resp_send_chunk(req, LOVE_ADMIN_HTML + offset, length);
+        if (err != ESP_OK) return err;
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);   // 结束分块传输
 }
 
 static esp_err_t handle_state(httpd_req_t *req)
@@ -544,8 +558,11 @@ esp_err_t love_httpd_start(void)
     config.max_open_sockets = 3;
     config.lru_purge_enable = true;
     config.stack_size = 6144;
-    config.recv_wait_timeout = 5;
-    config.send_wait_timeout = 5;
+    // 发送超时放宽到 20 秒。后台页是大响应,客户端一旦读得慢,发送窗口就会短暂
+    // 排不空;原来的 5 秒会让 httpd 把这种"慢但在推进"的情况判成失败
+    // (日志 "httpd_sock_err: error in send : 11")并把响应掐断。
+    config.recv_wait_timeout = 10;
+    config.send_wait_timeout = 20;
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {

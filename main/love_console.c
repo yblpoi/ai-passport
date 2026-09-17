@@ -18,9 +18,11 @@
 #include "love_store.h"
 #include "love_time.h"
 
+#include "bsp_display.h"
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "lvgl.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -286,7 +288,14 @@ static int cmd_time(void *ctx, int argc, char **argv)
 // 几个关键任务的剩余栈(字节)。v4 起一个 love_config_t 就是 1454 字节,而它是整份
 // 落在调用它的任务栈上的 —— 这几个数就是"还能不能再加事件条数或字段"的判断依据,
 // 也是本仓库反复用到的那类实测数据。取不到的任务直接跳过(比如蓝牙没开时没有
-// nimble_host 任务)。
+// nimble_host 任务,蓝牙关掉后 love_ble_con 也会自己退出)。
+//
+// 按键那一项(任务名 input,见 main.c)才是"机身按键 → 整屏重绘"的真实执行者:
+// BSP 的按键回调跑在 esp_timer 上,但它只做一件事 —— 把事件丢进队列立刻返回,
+// 真正的 love_app_key/render 在 input 任务(4096)里跑。所以要看界面深度的余量,
+// 看 input;esp_timer 只反映驱动回调那一小段。顺带记一笔:esp_timer 的栈不是
+// CONFIG_ESP_TIMER_TASK_STACK_SIZE(3584),IDF 还给非 nano 格式化加了 512,
+// 实际是 4096 —— 这个值只能从水位反推,别按 3584 算余量。
 static void print_stack_headroom(void)
 {
     static const struct {
@@ -296,7 +305,10 @@ static void print_stack_headroom(void)
         { "console_repl", "控制台" },
         { "httpd",        "网页" },
         { "taskLVGL",     "界面" },
+        { "input",        "按键" },
         { "nimble_host",  "蓝牙" },
+        { "love_ble_con", "蓝牙台" },
+        { "esp_timer",    "定时" },
     };
 
     char line[OUT_MAX];
@@ -364,6 +376,22 @@ static void print_event_order(void)
     free(cfg);
 }
 
+// LVGL 自己那块内存池(与系统堆分开,见 sdkconfig.defaults 的 LV_MEM_SIZE_KILOBYTES)。
+// 池子配小了不会报错,只会表现为"某些控件没画出来"——对象创建失败是静默的,
+// 所以这里把峰值用量摆出来:sdkconfig.defaults 里"18KB 够用,若出现控件创建失败
+// 再往上调"这句判断,靠的就是这几个数,而不是靠肉眼看屏幕猜。
+static void print_lvgl_pool(void)
+{
+    if (!bsp_lvgl_lock(200)) return;
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    bsp_lvgl_unlock();
+
+    love_console_out("界面池 共 %u, 峰值占用 %u, 剩余 %u(最大可分配 %u)\n",
+                     (unsigned)mon.total_size, (unsigned)mon.max_used,
+                     (unsigned)mon.free_size, (unsigned)mon.free_biggest_size);
+}
+
 static int cmd_status(void *ctx, int argc, char **argv)
 {
     (void)ctx;
@@ -394,6 +422,7 @@ static int cmd_status(void *ctx, int argc, char **argv)
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
     print_stack_headroom();
+    print_lvgl_pool();
     print_event_order();
     return 0;
 }

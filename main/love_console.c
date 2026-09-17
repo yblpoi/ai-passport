@@ -261,11 +261,20 @@ static void print_event_order(void)
                                                     order, sizeof(order));
         if (count == 0) continue;
 
+        // 24 条事件一行放不下(单条输出有 192 字节上限,也是蓝牙通知的分片上限),
+        // 所以写满一行就发一行再接着写,别让后面的事件被静默截掉。
         int used = snprintf(line, sizeof(line), "%s", labels[f]);
-        for (size_t i = 0; i < count && used > 0 && used < (int)sizeof(line); i++) {
+        for (size_t i = 0; i < count; i++) {
             const love_event_t *event = &cfg->events[order[i]];
-            used += snprintf(line + used, sizeof(line) - (size_t)used, " %s[%s]",
-                             event->name, event->category[0] ? event->category : "未分类");
+            const int written = snprintf(line + used, sizeof(line) - (size_t)used,
+                                         " %s[%s]", event->name,
+                                         event->category[0] ? event->category : "未分类");
+            if (written > 0 && used + written < (int)sizeof(line) - 16) {
+                used += written;
+                continue;
+            }
+            love_console_out("%s\n", line);
+            used = snprintf(line, sizeof(line), "    ");
         }
         love_console_out("%s\n", line);
     }

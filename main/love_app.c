@@ -15,8 +15,8 @@
 #include "love_pixel_art.h"
 #include "love_store.h"
 #include "love_time.h"
+#include "ui_pixel.h"
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -51,10 +51,8 @@ static const char *TAG = "love_app";
 
 #define SETTINGS_ROWS 9
 
-// 自动熄屏档位(秒);0 表示不熄屏。
-#define BLANK_OFF_CHOICES 5
-static const uint16_t BLANK_OFF_SECONDS[BLANK_OFF_CHOICES] = { 15, 30, 60, 180, 0 };
-static const char *const BLANK_OFF_LABELS[BLANK_OFF_CHOICES] = { "15 秒", "30 秒", "1 分钟", "3 分钟", "常亮" };
+// 自动熄屏档位(秒)取自 love_store 的共享表,顺序与之严格一致;0 表示不熄屏。
+static const char *const BLANK_OFF_LABELS[LOVE_BLANK_OFF_COUNT] = { "15 秒", "30 秒", "1 分钟", "3 分钟", "常亮" };
 
 
 typedef enum {
@@ -69,13 +67,9 @@ typedef enum {
 static lv_obj_t *s_scr;
 static lv_obj_t *s_big;
 static lv_obj_t *s_unit;
-static lv_obj_t *s_date;
 static lv_obj_t *s_battery;
 static lv_obj_t *s_battery_fill;   // 电量格,宽度随百分比变化
-static lv_obj_t *s_hint;
 static lv_obj_t *s_page;
-static lv_obj_t *s_name;
-static lv_obj_t *s_icon;
 static lv_timer_t *s_tick;
 static lv_font_t s_font_12;
 static lv_font_t s_font_24;
@@ -100,39 +94,16 @@ static void render(void);
 
 // 主字号(24px)与辅助字号(12px)。像素字体只有这两种正文尺寸,别随手加第三种:
 // 非整数倍放大会让笔画粗细不匀,失去点阵观感。
-static lv_obj_t *pix_label(lv_obj_t *parent, const char *text, uint32_t color,
-                           const lv_font_t *font)
-{
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, font, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
-    return label;
-}
-
 static lv_obj_t *cjk_label(lv_obj_t *parent, const char *text, uint32_t color)
 {
-    return pix_label(parent, text, color, &s_font_24);
+    return ui_pixel_label(parent, text, &s_font_24, color);
 }
 
 static lv_obj_t *cjk_small(lv_obj_t *parent, const char *text, uint32_t color)
 {
-    return pix_label(parent, text, color, &s_font_12);
+    return ui_pixel_label(parent, text, &s_font_12, color);
 }
 
-
-static void blk(lv_obj_t *parent, int x, int y, int w, int h, uint32_t color, lv_opa_t opa)
-{
-    lv_obj_t *obj = lv_obj_create(parent);
-    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_pos(obj, x, y);
-    lv_obj_set_size(obj, w, h);
-    lv_obj_set_style_radius(obj, 0, 0);
-    lv_obj_set_style_border_width(obj, 0, 0);
-    lv_obj_set_style_pad_all(obj, 0, 0);
-    lv_obj_set_style_bg_color(obj, lv_color_hex(color), 0);
-    lv_obj_set_style_bg_opa(obj, opa, 0);
-}
 
 static bool time_today(love_date_t *today)
 {
@@ -199,12 +170,9 @@ static int battery_fill_width(int soc)
 // 白色外框 + 粉色电量格的像素电池,右侧跟同色系的百分比文字。
 static void build_battery(lv_obj_t *parent)
 {
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *row = ui_pixel_plain(parent);
     lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_pad_all(row, 0, 0);
     lv_obj_set_style_pad_column(row, 4, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -219,17 +187,14 @@ static void build_battery(lv_obj_t *parent)
     lv_obj_set_style_border_color(shell, lv_color_hex(COL_WHITE), 0);
     lv_obj_set_style_pad_all(shell, 0, 0);
 
-    s_battery_fill = lv_obj_create(shell);
-    lv_obj_remove_flag(s_battery_fill, LV_OBJ_FLAG_SCROLLABLE);
+    s_battery_fill = ui_pixel_plain(shell);
     lv_obj_set_style_radius(s_battery_fill, 0, 0);
-    lv_obj_set_style_border_width(s_battery_fill, 0, 0);
-    lv_obj_set_style_pad_all(s_battery_fill, 0, 0);
     lv_obj_set_style_bg_color(s_battery_fill, lv_color_hex(COL_BAT_FILL), 0);
     lv_obj_set_style_bg_opa(s_battery_fill, LV_OPA_COVER, 0);
     lv_obj_set_size(s_battery_fill, 0, BAT_FILL_H);
     lv_obj_align(s_battery_fill, LV_ALIGN_LEFT_MID, 0, 0);
 
-    s_battery = pix_label(row, "-- %", COL_BAT_TEXT, &s_font_12);
+    s_battery = ui_pixel_label(row, "-- %", &s_font_12, COL_BAT_TEXT);
 
     // 建好就直接填一次,免得等下一秒 tick 才出数。
     int soc = bsp_battery_soc();
@@ -242,7 +207,7 @@ static void build_battery(lv_obj_t *parent)
 // 主屏/事件卡共用的“大数字”排版。36px 像素数字每字 18px 宽，10 位数也放得下。
 static void add_big_number(lv_obj_t *parent, int32_t value, bool holds, int y)
 {
-    s_big = pix_label(parent, "", COL_WHITE, &love_font_36);
+    s_big = ui_pixel_label(parent, "", &love_font_36, COL_WHITE);
     lv_label_set_text_fmt(s_big, holds ? "%d" : "--", (int)value);
     lv_obj_align(s_big, LV_ALIGN_TOP_MID, 0, y);
 }
@@ -307,16 +272,15 @@ static const lv_image_dsc_t *resolve_icon(uint8_t icon)
 // 日期行:编辑态用【】标出当前字段,小屏上也能看清焦点在哪。
 static void format_date_line(char *out, size_t size, const char *prefix, love_date_t date)
 {
-    char raw[16];
-    love_date_format(date, raw, sizeof(raw));
-    if (s_edit_field < 0) {
-        snprintf(out, size, "%s %s", prefix, raw);
+    // 非法日期与 love_date_format 的空串输出保持一致,只留前缀。
+    if (!love_date_valid(date)) {
+        snprintf(out, size, "%s %s", prefix, "");
         return;
     }
 
-    int year = 0, month = 0, day = 0;
-    if (sscanf(raw, "%4d-%2d-%2d", &year, &month, &day) != 3) {
-        snprintf(out, size, "%s %s", prefix, raw);
+    const int year = date.year, month = date.month, day = date.day;
+    if (s_edit_field < 0) {
+        snprintf(out, size, "%s %04d-%02d-%02d", prefix, year, month, day);
         return;
     }
     if (s_edit_field == 0) {
@@ -376,19 +340,19 @@ static uint16_t blank_off_seconds(void)
     return s_cfg.blank_off_seconds;
 }
 
-// 把当前配置换算成档位下标(用于设置页显示);找不到时落到 30 秒。
+// 把当前配置换算成档位下标(用于设置页显示);找不到时落到默认档。
 static int blank_off_index(void)
 {
-    for (int i = 0; i < BLANK_OFF_CHOICES; i++) {
-        if (BLANK_OFF_SECONDS[i] == s_cfg.blank_off_seconds) return i;
+    for (int i = 0; i < LOVE_BLANK_OFF_COUNT; i++) {
+        if (LOVE_BLANK_OFF_SECONDS[i] == s_cfg.blank_off_seconds) return i;
     }
     return 1;
 }
 
 static void blank_off_index_step(int delta)
 {
-    int i = (blank_off_index() + delta + BLANK_OFF_CHOICES) % BLANK_OFF_CHOICES;
-    s_cfg.blank_off_seconds = BLANK_OFF_SECONDS[i];
+    int i = (blank_off_index() + delta + LOVE_BLANK_OFF_COUNT) % LOVE_BLANK_OFF_COUNT;
+    s_cfg.blank_off_seconds = LOVE_BLANK_OFF_SECONDS[i];
 }
 
 // 记住"最近一次操作",熄屏计时从这里算起。
@@ -429,8 +393,24 @@ static void blank_off_poll(void)
 typedef struct {
     const char *label;
     char value[LOVE_WIFI_PASS_MAX];   // 最长的是热点密码/SSID(65 字节上限)
-    action_t action;
 } setting_row_t;
+
+// 每一行按下确定键时执行的动作,下标与 SETTINGS_ROWS 一一对应。
+// 单独成表是为了让 render() 只管显示、handle_settings_key() 不必为了拿动作
+// 把整页文字重建一遍。
+static const action_t SETTING_ACTIONS[SETTINGS_ROWS] = {
+    ACT_AP_TOGGLE,   // 后台热点
+    ACT_NONE,        // 后台地址
+    ACT_NONE,        // 热点密码
+    ACT_NONE,        // 网络
+    ACT_SYNC,        // 时间
+    ACT_BLANK_OFF,   // 自动熄屏
+    ACT_NONE,        // 蓝牙对时
+    ACT_MENU,        // Demo 菜单
+    ACT_BACK,        // 返回主屏
+};
+_Static_assert(sizeof(SETTING_ACTIONS) / sizeof(SETTING_ACTIONS[0]) == SETTINGS_ROWS,
+               "设置页动作表与 SETTINGS_ROWS 行数不一致");
 
 static int build_settings(setting_row_t *rows)
 {
@@ -444,17 +424,14 @@ static int build_settings(setting_row_t *rows)
 
     rows[count].label = "后台热点";
     snprintf(rows[count].value, sizeof(rows[count].value), "%s", net.ap_active ? "开" : "关");
-    rows[count].action = ACT_AP_TOGGLE;
     count++;
 
     rows[count].label = "后台地址";
     snprintf(rows[count].value, sizeof(rows[count].value), "%s", "192.168.4.1");
-    rows[count].action = ACT_NONE;
     count++;
 
     rows[count].label = "热点密码";
     snprintf(rows[count].value, sizeof(rows[count].value), "%s", net.ap_pass);
-    rows[count].action = ACT_NONE;
     count++;
 
     rows[count].label = "网络";
@@ -467,7 +444,6 @@ static int build_settings(setting_row_t *rows)
     } else {
         snprintf(rows[count].value, sizeof(rows[count].value), "%s", "未配置");
     }
-    rows[count].action = ACT_NONE;
     count++;
 
     rows[count].label = "时间";
@@ -477,29 +453,24 @@ static int build_settings(setting_row_t *rows)
         snprintf(rows[count].value, sizeof(rows[count].value), "%s",
                  time_state.wifi_pending ? "等待网络对时" : "未同步");
     }
-    rows[count].action = ACT_SYNC;
     count++;
 
     rows[count].label = "自动熄屏";
     snprintf(rows[count].value, sizeof(rows[count].value), "%s",
              BLANK_OFF_LABELS[blank_off_index()]);
-    rows[count].action = ACT_BLANK_OFF;
     count++;
 
     rows[count].label = "蓝牙对时";
     snprintf(rows[count].value, sizeof(rows[count].value), "%s",
              love_ble_ready() ? "广播中" : "未广播");
-    rows[count].action = ACT_NONE;
     count++;
 
     rows[count].label = "Demo 菜单";
     snprintf(rows[count].value, sizeof(rows[count].value), "%s", "进入");
-    rows[count].action = ACT_MENU;
     count++;
 
     rows[count].label = "返回主屏";
     snprintf(rows[count].value, sizeof(rows[count].value), "%s", "确定键");
-    rows[count].action = ACT_BACK;
     count++;
 
     return count;
@@ -509,19 +480,21 @@ static int build_settings(setting_row_t *rows)
 
 static void render(void)
 {
+    // 这几行文字/图标都是"建好即用",不进 refresh_dynamic,所以做成局部变量。
+    lv_obj_t *date_obj;
+    lv_obj_t *hint_obj;
+    lv_obj_t *name_obj;
+    lv_obj_t *icon_obj;
+
     if (s_scr) {
         lv_obj_delete(s_scr);
         s_scr = NULL;
     }
-    s_big = s_unit = s_date = s_battery = s_hint = s_page = NULL;
+    s_big = s_unit = s_battery = s_page = NULL;
     s_battery_fill = NULL;
-    s_name = s_icon = NULL;
     s_avatar_used = 0;   // 每次重绘重新算一遍本屏用到哪些自定义头像
 
-    s_scr = lv_obj_create(NULL);
-    lv_obj_remove_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_pad_all(s_scr, 0, 0);
-    lv_obj_set_style_border_width(s_scr, 0, 0);
+    s_scr = ui_pixel_plain(NULL);
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(COL_PINK), 0);
     // 与后台网页、素材生成脚本共用同一张爱心底纹。
     lv_obj_set_style_bg_image_src(s_scr, love_pixel_bg_tile(), 0);
@@ -546,7 +519,7 @@ static void render(void)
         for (int i = 0; i < count; i++) {
             int y = 32 + i * 24;
             bool selected = i == s_sel;
-            if (selected) blk(s_scr, 10, y - 4, 220, 22, COL_WHITE, LV_OPA_COVER);
+            if (selected) ui_pixel_block(s_scr, 10, y - 4, 220, 22, COL_WHITE);
             lv_obj_t *label = cjk_small(s_scr, rows[i].label,
                                         selected ? COL_INK : COL_WHITE);
             lv_obj_align(label, LV_ALIGN_TOP_LEFT, 16, y);
@@ -555,8 +528,8 @@ static void render(void)
             lv_obj_align(value, LV_ALIGN_TOP_RIGHT, -16, y);
         }
 
-        s_hint = cjk_label(s_scr, "上/下 选择 · 确定 执行", COL_WHITE);
-        lv_obj_align(s_hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+        hint_obj = cjk_label(s_scr, "上/下 选择 · 确定 执行", COL_WHITE);
+        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
         lv_screen_load(s_scr);
         return;
     }
@@ -565,13 +538,10 @@ static void render(void)
         // 两个人像移到标题上方并放大(40px 图标 + 24px 名字),人物先出场。
         const int CENTERS[LOVE_PERSON_MAX] = { 62, 178 };
         for (int i = 0; i < LOVE_PERSON_MAX; i++) {
-            lv_obj_t *person = lv_obj_create(s_scr);
-            lv_obj_remove_flag(person, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_t *person = ui_pixel_plain(s_scr);
             lv_obj_set_pos(person, CENTERS[i] - 48, 34);
             lv_obj_set_size(person, 96, 100);
             lv_obj_set_style_bg_opa(person, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_border_width(person, 0, 0);
-            lv_obj_set_style_pad_all(person, 0, 0);
 
             lv_obj_t *icon = lv_image_create(person);
             lv_image_set_src(icon, resolve_icon(s_cfg.people[i].icon));
@@ -598,15 +568,15 @@ static void render(void)
         s_unit = cjk_small(s_scr, unit, COL_WHITE);
         lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 196);
 
-        blk(s_scr, 60, 216, 120, 3, COL_SHADOW, LV_OPA_COVER);
+        ui_pixel_block(s_scr, 60, 216, 120, 3, COL_SHADOW);
 
         char text[48];
         format_date_line(text, sizeof(text), "起始日", s_cfg.start);
-        s_date = cjk_small(s_scr, text, COL_WHITE);
-        lv_obj_align(s_date, LV_ALIGN_TOP_MID, 0, 228);
+        date_obj = cjk_small(s_scr, text, COL_WHITE);
+        lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 228);
 
-        s_hint = cjk_small(s_scr, "上/下 切换 · 长按确定 设置", COL_WHITE);
-        lv_obj_align(s_hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+        hint_obj = cjk_small(s_scr, "上/下 切换 · 长按确定 设置", COL_WHITE);
+        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
         lv_screen_load(s_scr);
         return;
     }
@@ -617,18 +587,18 @@ static void render(void)
     if (index >= s_cfg.event_count) index = s_cfg.event_count - 1;
     const love_event_t *event = &s_cfg.events[index];
 
-    s_page = pix_label(s_scr, "", COL_WHITE, &s_font_12);
+    s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
     lv_label_set_text_fmt(s_page, "%d/%d", index + 1, (int)s_cfg.event_count);
     lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
 
-    s_icon = lv_image_create(s_scr);
-    lv_image_set_src(s_icon, resolve_icon(event->icon));
-    lv_obj_align(s_icon, LV_ALIGN_TOP_MID, 0, 40);
+    icon_obj = lv_image_create(s_scr);
+    lv_image_set_src(icon_obj, resolve_icon(event->icon));
+    lv_obj_align(icon_obj, LV_ALIGN_TOP_MID, 0, 40);
 
-    s_name = cjk_label(s_scr, event->name, COL_WHITE);
-    lv_label_set_long_mode(s_name, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(s_name, 224);
-    lv_obj_align(s_name, LV_ALIGN_TOP_MID, 0, 92);
+    name_obj = cjk_label(s_scr, event->name, COL_WHITE);
+    lv_label_set_long_mode(name_obj, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(name_obj, 224);
+    lv_obj_align(name_obj, LV_ALIGN_TOP_MID, 0, 92);
 
     love_countdown_t countdown = { 0, true, true, event->date };
     if (holds) countdown = love_event_countdown(event, today);
@@ -649,14 +619,14 @@ static void render(void)
 
     char date_text[48];
     format_event_line(date_text, sizeof(date_text), event, &countdown, unresolved);
-    s_date = cjk_small(s_scr, date_text, COL_WHITE);
-    lv_obj_align(s_date, LV_ALIGN_TOP_MID, 0, 194);
+    date_obj = cjk_small(s_scr, date_text, COL_WHITE);
+    lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 194);
 
-    s_hint = cjk_small(s_scr,
-                       s_edit_field >= 0 ? "上+1 下换位 确定保存"
-                                         : (lunar ? "确定 改农历日期" : "确定 改日期"),
-                       COL_WHITE);
-    lv_obj_align(s_hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+    hint_obj = cjk_small(s_scr,
+                         s_edit_field >= 0 ? "上+1 下换位 确定保存"
+                                           : (lunar ? "确定 改农历日期" : "确定 改日期"),
+                         COL_WHITE);
+    lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
 
     if (s_note[0]) {
         lv_obj_t *note = cjk_small(s_scr, s_note, COL_WHITE);
@@ -767,9 +737,6 @@ static void set_note(const char *text)
 
 static void handle_settings_key(bsp_btn_t btn, bsp_btn_ev_t ev, action_t *action)
 {
-    setting_row_t rows[SETTINGS_ROWS];
-    int count = build_settings(rows);
-
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
         s_view = VIEW_MAIN;
         render();
@@ -778,15 +745,15 @@ static void handle_settings_key(bsp_btn_t btn, bsp_btn_ev_t ev, action_t *action
     if (ev != BSP_BTN_CLICK) return;
 
     if (btn == BSP_BTN_UP) {
-        s_sel = (s_sel + count - 1) % count;
+        s_sel = (s_sel + SETTINGS_ROWS - 1) % SETTINGS_ROWS;
         s_note[0] = '\0';
         render();
     } else if (btn == BSP_BTN_DOWN) {
-        s_sel = (s_sel + 1) % count;
+        s_sel = (s_sel + 1) % SETTINGS_ROWS;
         s_note[0] = '\0';
         render();
     } else if (btn == BSP_BTN_OK) {
-        *action = rows[s_sel].action;
+        *action = SETTING_ACTIONS[s_sel];
     }
 }
 
@@ -914,7 +881,7 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             // 改档位本身就是一次操作,重置计时,免得刚选完就黑屏。
             note_input();
             screen_wake();
-            set_note(BLANK_OFF_SECONDS[blank_off_index()] == 0 ? "已设为常亮" : "已更新熄屏时间");
+            set_note(LOVE_BLANK_OFF_SECONDS[blank_off_index()] == 0 ? "已设为常亮" : "已更新熄屏时间");
             render();
             bsp_lvgl_unlock();
         }
@@ -984,9 +951,8 @@ void love_app_exit(void)
     if (s_scr) {
         lv_obj_delete(s_scr);
         s_scr = NULL;
-        s_big = s_unit = s_date = s_battery = s_hint = s_page = NULL;
+        s_big = s_unit = s_battery = s_page = NULL;
         s_battery_fill = NULL;
-        s_name = s_icon = NULL;
     }
 }
 

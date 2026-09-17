@@ -182,6 +182,34 @@ static void test_format_and_epoch(void)
     assert(hour == 23 && minute == 0);
 }
 
+static void test_parse(void)
+{
+    love_date_t out = date(1, 1, 1);
+
+    // 合法日期(含后台网页会传过来的补零写法)。
+    assert(love_date_parse("2000-01-01", &out));
+    assert(out.year == 2000 && out.month == 1 && out.day == 1);
+    assert(love_date_parse("2026-12-5", &out));
+    assert(out.year == 2026 && out.month == 12 && out.day == 5);
+
+    // 格式不符:字段不足、非数字、空串。
+    assert(!love_date_parse("2026-08", &out));
+    assert(!love_date_parse("abcd-ef-gh", &out));
+    assert(!love_date_parse("", &out));
+
+    // 格式对但日期非法:平年 2 月 29 日、13 月、4 月 31 日、超范围年份。
+    assert(!love_date_parse("2026-02-29", &out));
+    assert(!love_date_parse("2026-13-01", &out));
+    assert(!love_date_parse("2026-04-31", &out));
+    assert(!love_date_parse("1969-12-31", &out));
+    assert(!love_date_parse("2100-01-01", &out));
+
+    // 失败时不得改写 out。
+    assert(!love_date_parse(NULL, &out));
+    assert(!love_date_parse("2026-02-29", NULL));
+    assert(out.year == 2026 && out.month == 12 && out.day == 5);
+}
+
 int main(void)
 {
     test_civil_conversion();
@@ -192,5 +220,6 @@ int main(void)
     test_event_countdown();
     test_date_step();
     test_format_and_epoch();
+    test_parse();
     return 0;
 }

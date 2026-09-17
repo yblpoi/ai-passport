@@ -61,7 +61,6 @@ esp_err_t love_net_scan_results(love_net_ap_t *out, size_t max, size_t *count);
 
 // 热点空闲自动关闭:调用方定期喂心跳,超时后自动关热点省电。
 void love_net_ap_touch(void);
-void love_net_ap_set_timeout(uint32_t seconds);
 
 // 周期调用(建议 1 秒一次):处理热点空闲超时。
 void love_net_poll(void);

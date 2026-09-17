@@ -40,7 +40,6 @@ static love_net_ap_t s_scan[LOVE_NET_SCAN_MAX];
 static size_t s_scan_count;
 static volatile bool s_scan_pending;
 
-static uint32_t s_ap_timeout_s = AP_DEFAULT_TIMEOUT_S;
 static TickType_t s_ap_deadline;
 
 static void lock(void)
@@ -267,7 +266,7 @@ esp_err_t love_net_init(void)
         // 没配过网:开机就开热点,否则用户没有任何入口进后台。
         s_ap_requested = true;
     }
-    s_ap_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(s_ap_timeout_s * 1000);
+    love_net_ap_touch();
 
     apply_mode();
     s_inited = true;
@@ -321,7 +320,7 @@ esp_err_t love_net_ap_start(void)
 {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
     s_ap_requested = true;
-    s_ap_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(s_ap_timeout_s * 1000);
+    love_net_ap_touch();
     apply_mode();
     return ESP_OK;
 }
@@ -374,7 +373,6 @@ void love_net_get_status(love_net_status_t *out)
     lock();
     out->state = s_state;
     out->ap_active = s_ap_requested;
-    out->ip[0] = '\0';
     snprintf(out->ip, sizeof(out->ip), "%s", s_ip);
     out->rssi = s_rssi;
     snprintf(out->sta_ssid, sizeof(out->sta_ssid), "%s", s_sta_ssid);
@@ -418,13 +416,7 @@ esp_err_t love_net_scan_results(love_net_ap_t *out, size_t max, size_t *count)
 
 void love_net_ap_touch(void)
 {
-    s_ap_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(s_ap_timeout_s * 1000);
-}
-
-void love_net_ap_set_timeout(uint32_t seconds)
-{
-    s_ap_timeout_s = seconds;
-    love_net_ap_touch();
+    s_ap_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(AP_DEFAULT_TIMEOUT_S * 1000);
 }
 
 // 由设置页/后台轮询:热点长时间无人访问时自动关闭,省电。
@@ -432,7 +424,6 @@ void love_net_poll(void)
 {
     if (!s_inited || !s_ap_requested) return;
     if (s_sta_ssid[0] == '\0') return;   // 未配网时必须保留热点入口
-    if (s_ap_timeout_s == 0) return;
 
     if (xTaskGetTickCount() > s_ap_deadline) {
         ESP_LOGI(TAG, "热点空闲超时,自动关闭");

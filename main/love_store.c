@@ -23,6 +23,17 @@ static const char *TAG = "love_store";
 // v2:加入 blank_off_seconds(自动熄屏秒数)。
 #define LOVE_CONFIG_VERSION 2u
 
+// 自动熄屏档位(秒);0 = 常亮。顺序与设置页的档位标签一一对应,不要单独调整。
+const uint16_t LOVE_BLANK_OFF_SECONDS[LOVE_BLANK_OFF_COUNT] = { 15, 30, 60, 180, 0 };
+
+bool love_blank_off_valid(uint16_t seconds)
+{
+    for (size_t i = 0; i < LOVE_BLANK_OFF_COUNT; i++) {
+        if (LOVE_BLANK_OFF_SECONDS[i] == seconds) return true;
+    }
+    return false;
+}
+
 typedef struct {
     uint32_t version;
     love_config_t config;
@@ -61,7 +72,7 @@ static void copy_name(char *dst, const char *src, size_t size)
     dst[len] = '\0';
 }
 
-void love_config_defaults(love_config_t *cfg)
+static void love_config_defaults(love_config_t *cfg)
 {
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
@@ -105,7 +116,7 @@ void love_config_defaults(love_config_t *cfg)
         event->date.day = (int8_t)DEFAULTS[i].day;
     }
     cfg->event_count = (uint8_t)count;
-    cfg->blank_off_seconds = 30;   // 出厂 30 秒熄屏,任意键唤醒
+    cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;   // 出厂默认档位,任意键唤醒
 }
 
 // 载入的数据可能来自旧版本或被写坏,这里统一做一次合法性收敛。
@@ -122,13 +133,9 @@ static void sanitize_config(love_config_t *cfg)
         }
         if (cfg->people[i].icon >= LOVE_ICON_TOTAL) cfg->people[i].icon = 0;
     }
-    // 熄屏秒数只接受已知档位,别的一律回到 30 秒。
-    switch (cfg->blank_off_seconds) {
-    case 0: case 15: case 30: case 60: case 180:
-        break;
-    default:
-        cfg->blank_off_seconds = 30;
-        break;
+    // 熄屏秒数只接受已知档位,别的一律回到默认档。
+    if (!love_blank_off_valid(cfg->blank_off_seconds)) {
+        cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;
     }
     if (cfg->event_count > LOVE_EVENT_MAX) cfg->event_count = LOVE_EVENT_MAX;
     for (size_t i = 0; i < cfg->event_count; i++) {
@@ -211,17 +218,6 @@ esp_err_t love_store_save_config(const love_config_t *cfg)
     nvs_close(handle);
     if (err != ESP_OK) ESP_LOGE(TAG, "保存配置失败: %s", esp_err_to_name(err));
     return err;
-}
-
-bool love_store_has_wifi(void)
-{
-    if (!s_ready) return false;
-    nvs_handle_t handle;
-    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
-    size_t size = 0;
-    esp_err_t err = nvs_get_str(handle, KEY_WIFI_SSID, NULL, &size);
-    nvs_close(handle);
-    return err == ESP_OK && size > 1;
 }
 
 esp_err_t love_store_load_wifi(char *ssid, size_t ssid_size,
@@ -387,21 +383,6 @@ esp_err_t love_store_save_avatar(uint8_t slot, const void *data)
     nvs_close(handle);
     if (err != ESP_OK) ESP_LOGE(TAG, "保存头像 %u 失败: %s", (unsigned)slot, esp_err_to_name(err));
     return err;
-}
-
-bool love_store_has_avatar(uint8_t slot)
-{
-    if (slot >= LOVE_AVATAR_MAX || !s_ready) return false;
-
-    char key[8];
-    avatar_key(slot, key, sizeof(key));
-
-    nvs_handle_t handle;
-    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
-    size_t size = 0;
-    esp_err_t err = nvs_get_blob(handle, key, NULL, &size);
-    nvs_close(handle);
-    return err == ESP_OK && size == sizeof(avatar_record_t);
 }
 
 size_t love_store_load_avatar(uint8_t slot, void *out, size_t out_size)

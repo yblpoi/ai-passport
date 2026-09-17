@@ -158,6 +158,17 @@ void love_date_format(love_date_t d, char *buf, size_t size)
     snprintf(buf, size, "%04d-%02d-%02d", (int)d.year, (int)d.month, (int)d.day);
 }
 
+bool love_date_parse(const char *text, love_date_t *out)
+{
+    if (!text || !out) return false;
+    int year = 0, month = 0, day = 0;
+    if (sscanf(text, "%4d-%2d-%2d", &year, &month, &day) != 3) return false;
+    love_date_t date = { (int16_t)year, (int8_t)month, (int8_t)day };
+    if (!love_date_valid(date)) return false;
+    *out = date;
+    return true;
+}
+
 love_date_t love_date_from_epoch(uint64_t epoch_seconds, int32_t tz_offset_seconds)
 {
     int64_t shifted = (int64_t)epoch_seconds + (int64_t)tz_offset_seconds;

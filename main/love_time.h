@@ -41,6 +41,10 @@ void love_time_sntp_stop(void);
 // 界面文案:例如 “时间 来源:网页对时” / “时间未同步”。
 void love_time_describe(const love_time_state_t *state, char *buf, size_t size);
 
+// 时间来源的中文短文案(网络对时/网页对时/蓝牙对时/未同步)。
+// 界面与后台 REST 都从这里取,避免同一张映射表写两遍。
+const char *love_time_src_text(love_time_src_t source);
+
 // 对时结果监听:时间变化时在 love_time 任务上下文回调,供界面刷新。
 typedef void (*love_time_listener_t)(void *ctx);
 esp_err_t love_time_add_listener(love_time_listener_t listener, void *ctx);

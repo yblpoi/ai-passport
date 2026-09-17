@@ -9,7 +9,6 @@
 #include "freertos/task.h"
 
 #include <stdio.h>
-#include <string.h>
 #include <time.h>
 
 static const char *TAG = "love_time";
@@ -43,7 +42,6 @@ typedef struct {
 } listener_t;
 
 static QueueHandle_t s_queue;
-static TaskHandle_t s_task;
 static listener_t s_listeners[TIME_LISTENER_MAX];
 static size_t s_listener_count;
 
@@ -184,7 +182,7 @@ esp_err_t love_time_init(void)
 
     s_queue = xQueueCreate(8, sizeof(time_msg_t));
     if (!s_queue) return ESP_ERR_NO_MEM;
-    if (xTaskCreate(time_worker, "love_time", TIME_WORKER_STACK, NULL, 4, &s_task) != pdPASS) {
+    if (xTaskCreate(time_worker, "love_time", TIME_WORKER_STACK, NULL, 4, NULL) != pdPASS) {
         vQueueDelete(s_queue);
         s_queue = NULL;
         return ESP_ERR_NO_MEM;
@@ -231,6 +229,16 @@ void love_time_sntp_stop(void)
     (void)send_msg(&msg);
 }
 
+const char *love_time_src_text(love_time_src_t source)
+{
+    switch (source) {
+    case LOVE_TIME_SRC_SNTP: return "网络对时";
+    case LOVE_TIME_SRC_WEB:  return "网页对时";
+    case LOVE_TIME_SRC_BLE:  return "蓝牙对时";
+    default:                 return "未同步";
+    }
+}
+
 void love_time_describe(const love_time_state_t *state, char *buf, size_t size)
 {
     if (!buf || size == 0) return;
@@ -239,13 +247,7 @@ void love_time_describe(const love_time_state_t *state, char *buf, size_t size)
         return;
     }
 
-    const char *source = "未同步";
-    switch (state->source) {
-    case LOVE_TIME_SRC_SNTP: source = "网络对时"; break;
-    case LOVE_TIME_SRC_WEB:  source = "网页对时"; break;
-    case LOVE_TIME_SRC_BLE:  source = "蓝牙对时"; break;
-    default: break;
-    }
+    const char *source = love_time_src_text(state->source);
 
     love_date_t today = love_date_from_epoch(state->epoch_seconds, LOVE_TZ_OFFSET_SECONDS);
     int hour = 0, minute = 0;

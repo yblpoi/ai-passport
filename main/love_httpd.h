@@ -14,4 +14,3 @@ void love_httpd_set_changed_cb(love_httpd_changed_cb_t cb);
 
 esp_err_t love_httpd_start(void);
 void love_httpd_stop(void);
-bool love_httpd_running(void);

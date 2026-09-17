@@ -109,10 +109,6 @@ static void menu_build(void) {
     lv_screen_load(s_menu_scr);
 }
 
-static void enter_menu(void) {
-    menu_build();
-}
-
 // 宿主应用请求切到 demo 菜单:先交出按键、停掉它持有的网络/蓝牙/HTTP 服务,
 // 再删除页面并重建菜单。全程由 input task 调用,不与菜单逻辑并发。
 void app_shell_enter_menu(void) {
@@ -127,7 +123,7 @@ void app_shell_enter_menu(void) {
     love_app_exit();
     demo_navigation_init(&s_navigation, DEMO_COUNT);
     s_navigation.selected = DEMO_COUNTDOWN;   // 默认停在倒计时那一项,便于返回
-    enter_menu();
+    menu_build();
     bsp_lvgl_unlock();
 }
 
@@ -174,7 +170,7 @@ static void process_input(const input_event_t *input) {
             if (!bsp_lvgl_lock(500)) return;
             demo->exit();
             demo_navigation_complete_exit(&s_navigation);
-            enter_menu();
+            menu_build();
             bsp_lvgl_unlock();
         } else if (result.action == DEMO_NAV_ACTION_FORWARD) {
             demo->key(input->btn, input->event);
@@ -295,7 +291,7 @@ void app_main(void) {
         s_input_ready = true;
         enter_host_app();
     } else if (bsp_lvgl_lock(1000)) {
-        enter_menu();
+        menu_build();
         bsp_lvgl_unlock();
         s_input_ready = true;
     }

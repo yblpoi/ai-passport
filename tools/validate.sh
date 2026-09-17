@@ -8,7 +8,7 @@ usage() {
     echo "Usage: $0 [--all|--static|--firmware]" >&2
 }
 
-run_static_checks() {
+run_static_checks() (
     local actionlint_bin
     local test_dir
 
@@ -24,38 +24,35 @@ run_static_checks() {
     "${actionlint_bin}" -color .github/workflows/*.yml
 
     test_dir="$(mktemp -d /tmp/ai-passport-host-tests.XXXXXX)"
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
-        tests/test_ui_pixel_math.c main/ui_pixel_math.c \
-        -o "${test_dir}/test_ui_pixel_math"
-    "${test_dir}/test_ui_pixel_math"
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
-        tests/test_demo_navigation.c main/demo_navigation.c \
-        -o "${test_dir}/test_demo_navigation"
-    "${test_dir}/test_demo_navigation"
+    trap 'case "${test_dir}" in /tmp/ai-passport-host-tests.*) rm -rf -- "${test_dir}" ;; esac' EXIT
+
+    # 编译并运行一个 host test。参数:<测试名> <头文件目录> <源文件...>
+    # 测试名同时是 tests/<名>.c 与输出可执行文件名。
+    run_host_test() {
+        local name="$1"
+        local include_dir="$2"
+        shift 2
+        "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -I"${include_dir}" \
+            "tests/${name}.c" "$@" -o "${test_dir}/${name}"
+        "${test_dir}/${name}"
+    }
+
+    run_host_test test_ui_pixel_math main main/ui_pixel_math.c
+    run_host_test test_demo_navigation main main/demo_navigation.c
     # love_date.c 的农历事件会调 love_lunar,所以两个测试都要带上 love_lunar.c。
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
-        tests/test_love_date.c main/love_date.c main/love_lunar.c \
-        -o "${test_dir}/test_love_date"
-    "${test_dir}/test_love_date"
+    run_host_test test_love_date main main/love_date.c main/love_lunar.c
     # 农历换算依赖 tools/gen_lunar_table.py 生成的表,同样按纯逻辑测。
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
-        tests/test_love_lunar.c main/love_lunar.c main/love_date.c \
-        -o "${test_dir}/test_love_lunar"
-    "${test_dir}/test_love_lunar"
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Icomponents/bsp/src \
-        tests/test_bsp_display_rounding.c components/bsp/src/bsp_display_rounding.c \
-        -o "${test_dir}/test_bsp_display_rounding"
-    "${test_dir}/test_bsp_display_rounding"
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Icomponents/bsp/src \
-        tests/test_bsp_es8311_sleep_check.c components/bsp/src/bsp_es8311_sleep_check.c \
-        -o "${test_dir}/test_bsp_es8311_sleep_check"
-    "${test_dir}/test_bsp_es8311_sleep_check"
+    run_host_test test_love_lunar main main/love_lunar.c main/love_date.c
+    run_host_test test_bsp_display_rounding components/bsp/src \
+        components/bsp/src/bsp_display_rounding.c
+    run_host_test test_bsp_es8311_sleep_check components/bsp/src \
+        components/bsp/src/bsp_es8311_sleep_check.c
+
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_deep_sleep_contract.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
-    rm -rf "${test_dir}"
     echo "Host tests: PASS"
-}
+)
 
 run_firmware_checks() (
     local validation_build_dir

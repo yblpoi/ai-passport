@@ -87,6 +87,10 @@ love_date_t love_date_step(love_date_t d, int field, int delta);
 // 写 "YYYY-MM-DD" 到 buf,需要至少 11 字节;不足时写入空串。
 void love_date_format(love_date_t d, char *buf, size_t size);
 
+// 解析 "YYYY-MM-DD"。成功时写入 out 并返回 true;格式不符或日期非法返回 false。
+// 后台网页传来的日期字符串由这里统一入口,别再各处自己 sscanf。
+bool love_date_parse(const char *text, love_date_t *out);
+
 // UTC 秒 -> 当地日期/时间(东八区传 8*3600)。
 love_date_t love_date_from_epoch(uint64_t epoch_seconds, int32_t tz_offset_seconds);
 void love_hms_from_epoch(uint64_t epoch_seconds, int32_t tz_offset_seconds,

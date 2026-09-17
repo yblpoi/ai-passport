@@ -18,9 +18,19 @@ typedef enum {
 #define LOVE_WIFI_SSID_MAX 33
 #define LOVE_WIFI_PASS_MAX 65
 
-// 自定义头像槽位保存的是"定长灰度包"(见 love_store.c 的 LOVE_AVATAR_BYTES),
+// 自动熄屏档位(秒),0 表示常亮。设置页的档位标签、配置校验与后台写入校验
+// 共用同一张表,档位有变只需改这里。
+#define LOVE_BLANK_OFF_COUNT 5
+#define LOVE_BLANK_OFF_DEFAULT 30
+extern const uint16_t LOVE_BLANK_OFF_SECONDS[LOVE_BLANK_OFF_COUNT];
+
+// seconds 是否属于已知档位。
+bool love_blank_off_valid(uint16_t seconds);
+
+// 自定义头像槽位保存的是"定长 4bpp 索引包":40x40 像素、每字节 2 像素、
+// 高半字节在前(顺序与 assets/web/admin.html 的 compressAvatar 一致)。
 // 每个槽位固定 LOVE_AVATAR_BYTES 字节,便于按槽位随机读写。
-#define LOVE_AVATAR_BYTES 512
+#define LOVE_AVATAR_BYTES 800
 
 typedef struct {
     char name[LOVE_NAME_MAX];
@@ -35,9 +45,6 @@ typedef struct {
     love_event_t events[LOVE_EVENT_MAX];      // 事件列表
 } love_config_t;
 
-// 首次启动时的出厂默认值(与用户提供的截图一致),用户可在后台网页里改。
-void love_config_defaults(love_config_t *cfg);
-
 // 初始化 NVS 并载入已保存的配置(缺失时写入默认值)。
 esp_err_t love_store_init(void);
 
@@ -45,8 +52,7 @@ esp_err_t love_store_init(void);
 void love_store_load_config(love_config_t *cfg);
 esp_err_t love_store_save_config(const love_config_t *cfg);
 
-// Wi-Fi 凭据。密码只写入、不读出用于展示;has_wifi 表示是否已保存过。
-bool love_store_has_wifi(void);
+// Wi-Fi 凭据。密码只写入、不读出用于展示。
 esp_err_t love_store_load_wifi(char *ssid, size_t ssid_size,
                                char *pass, size_t pass_size);
 esp_err_t love_store_save_wifi(const char *ssid, const char *pass);
@@ -63,7 +69,6 @@ bool love_store_load_days_cache(int32_t *days, uint64_t *epoch_seconds);
 
 // 自定义头像。slot 为 0..LOVE_AVATAR_MAX-1,data 必须恰好 LOVE_AVATAR_BYTES 字节。
 esp_err_t love_store_save_avatar(uint8_t slot, const void *data);
-bool love_store_has_avatar(uint8_t slot);
 // 读出槽位数据;成功返回实际字节数,没有该槽位返回 0。
 size_t love_store_load_avatar(uint8_t slot, void *out, size_t out_size);
 esp_err_t love_store_clear_avatar(uint8_t slot);

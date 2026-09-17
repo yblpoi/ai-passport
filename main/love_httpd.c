@@ -152,17 +152,12 @@ static bool read_json(httpd_req_t *req, cJSON **out)
     return true;
 }
 
-static void format_date(love_date_t date, char *buf, size_t size)
-{
-    love_date_format(date, buf, size);
-}
-
 static cJSON *config_to_json(const love_config_t *cfg)
 {
     char buf[16];
     cJSON *root = cJSON_CreateObject();
 
-    format_date(cfg->start, buf, sizeof(buf));
+    love_date_format(cfg->start, buf, sizeof(buf));
     cJSON_AddStringToObject(root, "start", buf);
     // 自动熄屏秒数,0 = 常亮。后台页据此回填下拉框。
     cJSON_AddNumberToObject(root, "blankOff", cfg->blank_off_seconds);
@@ -187,7 +182,7 @@ static cJSON *config_to_json(const love_config_t *cfg)
             cJSON_AddNumberToObject(item, "lunarMonth", event->date.month);
             cJSON_AddNumberToObject(item, "lunarDay", event->date.day);
         } else {
-            format_date(event->date, buf, sizeof(buf));
+            love_date_format(event->date, buf, sizeof(buf));
             cJSON_AddStringToObject(item, "date", buf);
         }
         cJSON_AddItemToArray(events, item);
@@ -204,16 +199,6 @@ static const char *net_state_text(love_net_state_t state)
     case LOVE_NET_CONNECTED:  return "已联网";
     case LOVE_NET_FAILED:     return "连接失败";
     default:                  return "未知";
-    }
-}
-
-static const char *time_source_text(love_time_src_t source)
-{
-    switch (source) {
-    case LOVE_TIME_SRC_SNTP: return "网络对时";
-    case LOVE_TIME_SRC_WEB:  return "网页对时";
-    case LOVE_TIME_SRC_BLE:  return "蓝牙对时";
-    default:                 return "未同步";
     }
 }
 
@@ -241,7 +226,7 @@ static cJSON *state_to_json(void)
     love_time_describe(&time_state, described, sizeof(described));
     cJSON_AddBoolToObject(time, "synced", time_state.holds);
     cJSON_AddNumberToObject(time, "epoch", (double)time_state.epoch_seconds);
-    cJSON_AddStringToObject(time, "sourceText", time_source_text(time_state.source));
+    cJSON_AddStringToObject(time, "sourceText", love_time_src_text(time_state.source));
     cJSON_AddStringToObject(time, "text", described);
 
     cJSON *net_json = cJSON_AddObjectToObject(root, "net");
@@ -273,6 +258,13 @@ static cJSON *state_to_json(void)
         }
     }
     return root;
+}
+
+// 改动落盘后的统一收尾:先让设备界面刷新,再把最新状态回给网页。
+static esp_err_t finish(httpd_req_t *req)
+{
+    notify_changed();
+    return send_json(req, state_to_json(), NULL);
 }
 
 static esp_err_t handle_page(httpd_req_t *req)
@@ -308,8 +300,7 @@ static esp_err_t handle_avatar(httpd_req_t *req)
     if (love_store_save_avatar((uint8_t)slot, data) != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "保存头像失败");
     }
-    notify_changed();
-    return send_json(req, state_to_json(), NULL);
+    return finish(req);
 }
 
 // POST /api/avatar/clear?slot=N —— 清掉槽位,退回内置图标。
@@ -322,19 +313,7 @@ static esp_err_t handle_avatar_clear(httpd_req_t *req)
         return send_error(req, "400 Bad Request", "slot 参数不合法");
     }
     (void)love_store_clear_avatar((uint8_t)slot);
-    notify_changed();
-    return send_json(req, state_to_json(), NULL);
-}
-
-static bool parse_date_string(const char *text, love_date_t *out)
-{
-    if (!text) return false;
-    int year = 0, month = 0, day = 0;
-    if (sscanf(text, "%4d-%2d-%2d", &year, &month, &day) != 3) return false;
-    love_date_t date = { (int16_t)year, (int8_t)month, (int8_t)day };
-    if (!love_date_valid(date)) return false;
-    *out = date;
-    return true;
+    return finish(req);
 }
 
 static esp_err_t handle_config(httpd_req_t *req)
@@ -350,19 +329,13 @@ static esp_err_t handle_config(httpd_req_t *req)
     const cJSON *start = cJSON_GetObjectItem(root, "start");
     if (cJSON_IsString(start)) {
         love_date_t parsed;
-        if (parse_date_string(start->valuestring, &parsed)) cfg.start = parsed;
+        if (love_date_parse(start->valuestring, &parsed)) cfg.start = parsed;
     }
 
     // 只接受已知档位,别让网页写入任意秒数。
     const cJSON *blank = cJSON_GetObjectItem(root, "blankOff");
-    if (cJSON_IsNumber(blank)) {
-        switch (blank->valueint) {
-        case 0: case 15: case 30: case 60: case 180:
-            cfg.blank_off_seconds = (uint16_t)blank->valueint;
-            break;
-        default:
-            break;
-        }
+    if (cJSON_IsNumber(blank) && love_blank_off_valid((uint16_t)blank->valueint)) {
+        cfg.blank_off_seconds = (uint16_t)blank->valueint;
     }
 
     const cJSON *people = cJSON_GetObjectItem(root, "people");
@@ -424,7 +397,7 @@ static esp_err_t handle_config(httpd_req_t *req)
                                              (int8_t)((day >= 0 && day <= 30) ? day : 1) };
             } else {
                 love_date_t parsed;
-                if (cJSON_IsString(date) && parse_date_string(date->valuestring, &parsed)) {
+                if (cJSON_IsString(date) && love_date_parse(date->valuestring, &parsed)) {
                     event->date = parsed;
                 } else {
                     event->date = cfg.start;
@@ -443,8 +416,7 @@ static esp_err_t handle_config(httpd_req_t *req)
     }
 
     // 改的是 2.4G Wi-Fi 名字以外的内容:立即刷新设备界面。
-    notify_changed();
-    return send_json(req, state_to_json(), NULL);
+    return finish(req);
 }
 
 static esp_err_t handle_time(httpd_req_t *req)
@@ -466,8 +438,7 @@ static esp_err_t handle_time(httpd_req_t *req)
     if (err != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "对时失败");
     }
-    notify_changed();
-    return send_json(req, state_to_json(), NULL);
+    return finish(req);
 }
 
 static esp_err_t handle_scan(httpd_req_t *req)
@@ -600,9 +571,4 @@ void love_httpd_stop(void)
     if (!s_server) return;
     httpd_stop(s_server);
     s_server = NULL;
-}
-
-bool love_httpd_running(void)
-{
-    return s_server != NULL;
 }

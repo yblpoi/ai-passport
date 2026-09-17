@@ -23,6 +23,7 @@ static bool                      s_ready;
 static const gpio_num_t s_deep_sleep_pins[] = {
     BSP_LCD_CS, BSP_LCD_SCLK, BSP_LCD_MOSI, BSP_LCD_DC, BSP_LCD_BL,
 };
+#define DEEP_SLEEP_PIN_COUNT (sizeof(s_deep_sleep_pins) / sizeof(s_deep_sleep_pins[0]))
 
 static const uint8_t s_deep_sleep_levels[] = {
     1, 0, 0, 0, 0,
@@ -30,8 +31,7 @@ static const uint8_t s_deep_sleep_levels[] = {
 
 static esp_err_t display_set_safe_levels(void) {
     esp_err_t first_error = ESP_OK;
-    for (size_t i = 0; i < sizeof(s_deep_sleep_pins) /
-                           sizeof(s_deep_sleep_pins[0]); i++) {
+    for (size_t i = 0; i < DEEP_SLEEP_PIN_COUNT; i++) {
         gpio_num_t pin = s_deep_sleep_pins[i];
         if ((int)pin < 0) continue;
         gpio_config_t cfg = {
@@ -53,8 +53,7 @@ static esp_err_t display_set_safe_levels(void) {
 static esp_err_t display_release_deep_sleep_holds(void) {
     gpio_deep_sleep_hold_dis();
     esp_err_t first_error = display_set_safe_levels();
-    for (size_t i = 0; i < sizeof(s_deep_sleep_pins) /
-                           sizeof(s_deep_sleep_pins[0]); i++) {
+    for (size_t i = 0; i < DEEP_SLEEP_PIN_COUNT; i++) {
         gpio_num_t pin = s_deep_sleep_pins[i];
         if ((int)pin < 0) continue;
         esp_err_t e = gpio_hold_dis(pin);
@@ -259,7 +258,8 @@ esp_err_t bsp_display_prepare_deep_sleep(void) {
     }
 
     bsp_display_backlight(0);
-    if (s_bl_ready && BSP_LCD_BL >= 0) {
+    // 背光引脚未接时 backlight_init() 不会置 s_bl_ready,故这里只需看该标志。
+    if (s_bl_ready) {
         esp_err_t e = ledc_stop(BSP_BL_LEDC_MODE, BSP_BL_LEDC_CHANNEL, 0);
         if (e != ESP_OK) {
             ESP_LOGE(TAG, "LCD 背光 PWM 停止失败: %s", esp_err_to_name(e));
@@ -272,8 +272,7 @@ esp_err_t bsp_display_prepare_deep_sleep(void) {
         ESP_LOGE(TAG, "LCD SPI 安全电平配置失败: %s", esp_err_to_name(e));
         if (first_error == ESP_OK) first_error = e;
     }
-    for (size_t i = 0; i < sizeof(s_deep_sleep_pins) /
-                           sizeof(s_deep_sleep_pins[0]); i++) {
+    for (size_t i = 0; i < DEEP_SLEEP_PIN_COUNT; i++) {
         gpio_num_t pin = s_deep_sleep_pins[i];
         if ((int)pin < 0) continue;
         e = gpio_hold_en(pin);

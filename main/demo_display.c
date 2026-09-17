@@ -12,20 +12,31 @@ static lv_obj_t *s_mascot;
 static int s_color_idx;
 static int s_bl_idx;
 
-static const uint32_t COLORS[] = { 0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF, 0x000000 };
-static const char    *COLOR_NAME[] = { "RED", "GREEN", "BLUE", "WHITE", "BLACK" };
+// 色块取值、显示名,以及该底色上文字是否用深色(否则用白字),保证任何
+// 色块上都看得见。三列放在一张表里,加颜色时不会漏改某一列。
+static const struct {
+    uint32_t color;
+    const char *name;
+    bool dark_text;
+} COLORS[] = {
+    { 0xFF0000, "RED",   false },
+    { 0x00FF00, "GREEN", false },
+    { 0x0000FF, "BLUE",  true  },
+    { 0xFFFFFF, "WHITE", false },
+    { 0x000000, "BLACK", true  },
+};
 #define COLOR_COUNT (sizeof(COLORS) / sizeof(COLORS[0]))
 
 static const uint8_t BL_LEVELS[] = { 100, 50, 10 };
 #define BL_COUNT (sizeof(BL_LEVELS) / sizeof(BL_LEVELS[0]))
 
 static void refresh(void) {
-    lv_obj_set_style_bg_color(s_swatch, lv_color_hex(COLORS[s_color_idx]), 0);
+    lv_obj_set_style_bg_color(s_swatch, lv_color_hex(COLORS[s_color_idx].color), 0);
     // 文字用与背景相反的明度,保证任何色块上都看得见
-    bool dark = (s_color_idx == 2 || s_color_idx == 4);   // BLUE / BLACK
-    lv_obj_set_style_text_color(s_info, dark ? lv_color_white() : lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_info, COLORS[s_color_idx].dark_text ? lv_color_white()
+                                                                     : lv_color_black(), 0);
     lv_label_set_text_fmt(s_info, "%s\n\nBACKLIGHT %d%%\n\nOK: NEXT COLOR\nUP/DOWN: LIGHT",
-                          COLOR_NAME[s_color_idx], BL_LEVELS[s_bl_idx]);
+                          COLORS[s_color_idx].name, BL_LEVELS[s_bl_idx]);
 }
 
 void demo_display_enter(void) {
@@ -34,7 +45,7 @@ void demo_display_enter(void) {
     bsp_display_backlight(BL_LEVELS[s_bl_idx]);
 
     s_scr = ui_pixel_screen_create("DISPLAY");
-    s_swatch = ui_pixel_panel_create(s_scr, 18, 58, 204, 188, COLORS[s_color_idx]);
+    s_swatch = ui_pixel_panel_create(s_scr, 18, 58, 204, 188, COLORS[s_color_idx].color);
     s_info = lv_label_create(s_swatch);
     lv_obj_set_style_text_font(s_info, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(s_info, LV_TEXT_ALIGN_CENTER, 0);

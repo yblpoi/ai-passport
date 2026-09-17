@@ -11,7 +11,6 @@
 #include "esp_wifi_default.h"
 #include "lvgl.h"
 #include <stdio.h>
-#include <string.h>
 
 static const char *TAG = "demo_wifi";
 

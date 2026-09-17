@@ -1,6 +1,9 @@
 // main/love_app.c —— 像素风纪念日摆件的界面与按键逻辑。
 //
-// 三个视图:主屏(在一起 N 天)、事件卡(逐个切换)、设置页(长按确定键)。
+// 视图分两类:**主页**一张,以及"轮播"上的一串**页**(单页事件卡在前、列表屏各页
+// 在后)。上/下键是唯一的翻页方式,越过两端回主页 —— 环的形状与页码的算法都在
+// love_view 里(纯逻辑,有主机测试),这里只负责画出来。
+// 另有设置页(长按确定键)与本机状态页。
 // 所有 LVGL 访问都在 bsp_lvgl_lock() 内;NVS 落盘、热点开关等慢操作放在锁外。
 #include "love_app.h"
 
@@ -16,6 +19,7 @@
 #include "love_pixel_art.h"
 #include "love_store.h"
 #include "love_time.h"
+#include "love_view.h"
 #include "power_sleep.h"
 #include "ui_pixel.h"
 #include "ui_pixel_math.h"
@@ -58,8 +62,8 @@ static const char *TAG = "love_app";
 #define VIEW_MAIN     0
 #define VIEW_SETTINGS (-1)
 #define VIEW_STATUS   (-2)
-// 事件列表屏(分页,一屏 4 条)。也是负数,所以**不能**再用 s_view ± 1 在视图之间跳:
-// -3 加一会串到 VIEW_STATUS(-2) 去。按键一律走显式分支。
+// 事件列表屏(一屏 4 条,停在第 s_list_page 页)。也是负数,所以**不能**再用
+// s_view ± 1 在视图之间跳:-3 加一会串到 VIEW_STATUS(-2) 去。按键一律走显式分支。
 #define VIEW_LIST     (-3)
 // 蓝牙危险命令的机身确认页(见 love_app_confirm_request)。同样是负数,按键走显式分支。
 #define VIEW_CONFIRM  (-4)
@@ -109,6 +113,10 @@ static lv_font_t s_font_24;
 static love_config_t s_cfg;
 static int s_view = VIEW_MAIN;
 static int s_sel;
+// 列表屏停在列表组的第几页(0 起)。列表页**没有条目光标**:上/下 只翻页,所以
+// 这里记的是页而不是行 —— 要看某条事件的完整卡片,就在后台网页上把它的展示方式
+// 设成"单页"。
+static int s_list_page;
 // 两组显示序(v4 起每个事件自己挑展示方式):列表屏只收"列表"事件,单页卡只认
 // "单页"事件。顺序由 love_event_order 决定,随"今天"变化(组内按远近排),
 // 所以每次进列表/重绘前都重算一次 —— 最多二十几条,代价可忽略。
@@ -464,6 +472,7 @@ static void screen_off(void)
     if (s_view != VIEW_MAIN) {
         s_view = VIEW_MAIN;
         s_sel = 0;
+        s_list_page = 0;
         s_note[0] = '\0';
         render();
     }
@@ -789,36 +798,60 @@ static int position_in(const uint8_t *order, int count, int raw_index)
     return -1;
 }
 
-// 视图环上的站位:先是列表屏的每一行(0..s_list_count-1),再是每个单页事件
-// (s_list_count .. s_list_count+s_page_count-1)。**主屏不在环上** —— 走到两头就回
-// 主屏,也就是"循环直到切回主页"。不在环上(比如已经从列表点开了某条)返回 -1。
-static int ring_position(void)
+// 轮播上一共几页(单页卡在前、列表页在后)。0 = 环上一页都没有,只有主页。
+static int page_total(void)
 {
-    if (s_view == VIEW_LIST) {
-        return (s_sel >= 0 && s_sel < s_list_count) ? s_sel : -1;
-    }
-    if (s_view > VIEW_MAIN) {
-        const int pos = position_in(s_page_order, s_page_count, s_view - 1);
-        if (pos >= 0) return s_list_count + pos;
-    }
-    return -1;
+    return love_view_total(s_page_count, s_list_count, LIST_PAGE_ROWS);
 }
 
-// 走到环上的某个站位;越界就是"回主屏"。
-static void goto_ring(int pos)
+// 当前停在哪一页(LOVE_VIEW_HOME = 不在环上:主屏、设置页、状态页、确认页,以及
+// "展示方式刚被后台改成列表"的那张卡)。
+static int current_slot(void)
 {
-    const int total = s_list_count + s_page_count;
-    if (pos < 0 || pos >= total) {
-        s_view = VIEW_MAIN;
-    } else if (pos < s_list_count) {
-        s_view = VIEW_LIST;
-        s_sel = pos;
+    if (s_view == VIEW_LIST) {
+        return love_view_slot(LOVE_VIEW_KIND_LIST, s_list_page, s_page_count, s_list_count,
+                              LIST_PAGE_ROWS);
+    }
+    if (s_view > VIEW_MAIN) {
+        // 单页卡的 s_view 用"原下标 + 1"编码(与主屏 0 不冲突)。环上的位置是它在
+        // **单页组**里的序号 —— 单页组的顺序与持久数组不一定一样。
+        const int pos = position_in(s_page_order, s_page_count, s_view - 1);
+        return love_view_slot(LOVE_VIEW_KIND_CARD, pos, s_page_count, s_list_count,
+                              LIST_PAGE_ROWS);
+    }
+    return LOVE_VIEW_HOME;
+}
+
+// 跳到轮播上的某一页;越出两端(或环是空的)就是回主屏。
+static void goto_slot(int slot)
+{
+    love_view_pos_t pos;
+    if (love_view_at(slot, s_page_count, s_list_count, LIST_PAGE_ROWS, &pos)) {
+        if (pos.kind == LOVE_VIEW_KIND_CARD) {
+            s_view = s_page_order[pos.index] + 1;
+        } else {
+            s_view = VIEW_LIST;
+            s_list_page = pos.index;
+        }
     } else {
-        // 单页事件的 s_view 用"原下标 + 1"编码,与主屏 0 不冲突。
-        s_view = s_page_order[pos - s_list_count] + 1;
+        s_view = VIEW_MAIN;
     }
     s_note[0] = '\0';
     render();
+}
+
+// 页码标签。**整套轮播一套编号**:单页卡与列表页共用分母,用户才知道自己走到哪里了。
+// (改这一版之前两者各算各的:单页卡报"1/1"、列表报"1/2",像两套互不相干的页面。)
+// 主页不写页码 —— 它是环的两端,不在编号里。
+static void build_page_label(void)
+{
+    const int total = page_total();
+    const int slot = current_slot();
+    if (total <= 0 || slot < 0) return;
+
+    s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
+    lv_label_set_text_fmt(s_page, "%d/%d", slot + 1, total);
+    lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
 }
 
 // 列表右列的天数文案。算不出来(没对时 / 农历超表)写 "--",与事件卡的说法一致,
@@ -854,32 +887,6 @@ static int category_width(const char *text)
     return width;
 }
 
-// 从列表点开的那条单页卡:在**列表那一组**里翻,翻到头回列表(光标停在刚才那条)。
-// 这是"列表里按确定看一眼"的路径,不改变这条事件的展示方式。
-static void move_in_list_group(int delta)
-{
-    const int pos = position_in(s_list_order, s_list_count, s_view - 1);
-    if (pos < 0) {
-        // 这条已经不在列表组里了(后台把它改成了单页、或者删了):退回列表,
-        // 别把用户留在一张既不在环上、也回不去的卡片上。
-        s_view = (s_list_count > 0) ? VIEW_LIST : VIEW_MAIN;
-        s_sel = 0;
-        s_note[0] = '\0';
-        render();
-        return;
-    }
-
-    const int next = pos + delta;
-    if (next < 0 || next >= s_list_count) {
-        s_sel = pos;
-        s_view = VIEW_LIST;
-    } else {
-        s_view = s_list_order[next] + 1;
-    }
-    s_note[0] = '\0';
-    render();
-}
-
 static void open_settings(void)
 {
     s_sel = 0;
@@ -888,26 +895,28 @@ static void open_settings(void)
     render();
 }
 
-// 列表屏与单页卡上的按键:两者都在视图环上,上/下就是环上前后一格。
-static void handle_ring_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+// 单页卡与列表页上的按键:两者都是轮播上的一页,上/下 就是前后翻一页。
+//
+// 列表页**没有条目光标** —— 上/下 只翻页,短按确定什么都不做。这是"上/下 不再切换
+// 条目,而是切换页面"的直接结果;要看某条事件的完整卡片(目标日、农历),
+// 就在后台网页上把它的展示方式设成"单页"。
+static void handle_page_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
-    const int pos = ring_position();
-
-    if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
-        goto_ring(pos < 0 ? 0 : pos + 1);
-    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
-        goto_ring(pos < 0 ? 0 : pos - 1);
-    } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK && s_view == VIEW_LIST) {
-        // 列表里按确定 = 看这一条的完整单页卡(倒计时、目标日都看得更清楚)。
-        if (s_sel >= 0 && s_sel < s_list_count) {
-            s_view = s_list_order[s_sel] + 1;
-            s_note[0] = '\0';
-            render();
-        }
-    } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+    if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
         open_settings();
+        return;
     }
-    // 单页卡上的确定键**什么都不做**:机身上没有改日期的入口,日期一律在后台网页改。
+    if (ev != BSP_BTN_CLICK) return;
+
+    const int total = page_total();
+    const int slot = current_slot();
+    if (btn == BSP_BTN_DOWN) {
+        goto_slot(love_view_step(slot, 1, total));
+    } else if (btn == BSP_BTN_UP) {
+        goto_slot(love_view_step(slot, -1, total));
+    }
+    // 短按确定:单页卡上机身没有改日期的入口(日期一律在后台网页改),列表页上
+    // 没有光标,所以两处都不做事。
 }
 
 static void render(void)
@@ -938,12 +947,18 @@ static void render(void)
     // 两组分组顺序每次重绘都算一遍:它们随"今天"变(组内按远近排),也随后台改配置变。
     rebuild_order(today, holds);
 
-    // 事件可能在后台被删了,当前位置就失效了 —— 收敛回主屏。
-    // **只判下标越界**:从列表点开一张"列表"事件的卡片是合法视图(它不是环上的站,
-    // 但也不该被弹走),这里不能顺手把它也当成非法。
-    if (s_view > VIEW_MAIN && s_view - 1 >= (int)s_cfg.event_count) {
+    // 事件可能在后台被删了、或者展示方式被改了,当前位置就失效了 —— 收敛回主屏。
+    // 停在一页上的只可能是:某条"单页"事件的卡片,或者列表屏。别的一律回主屏,
+    // 免得把用户留在一张既不在环上、又翻不动的画面上。
+    if (s_view > VIEW_MAIN &&
+        (s_view - 1 >= (int)s_cfg.event_count ||
+         s_cfg.events[s_view - 1].view_mode != LOVE_EVENT_VIEW_PAGE)) {
         s_view = VIEW_MAIN;
     }
+    // 后台删/加事件会改变列表页数,把页码夹回有效范围(否则会停在一张空页上)。
+    const int list_pages = love_view_list_pages(s_list_count, LIST_PAGE_ROWS);
+    if (s_list_page >= list_pages) s_list_page = (list_pages > 0) ? list_pages - 1 : 0;
+    if (s_list_page < 0) s_list_page = 0;
 
     // 右上角电量;取不到时显示 "--",不阻塞界面。
     // 状态页已经单列一行电量,不再重复画一个。
@@ -1016,23 +1031,15 @@ static void render(void)
         if (s_list_count == 0) {
             s_view = VIEW_MAIN;
         } else {
-            const int pages = (s_list_count + LIST_PAGE_ROWS - 1) / LIST_PAGE_ROWS;
-            const int page = s_sel / LIST_PAGE_ROWS + 1;
-            s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
-            lv_label_set_text_fmt(s_page, "%d/%d", page, pages);
-            lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
+            build_page_label();
 
-            const int first = (page - 1) * LIST_PAGE_ROWS;
+            const int first = s_list_page * LIST_PAGE_ROWS;
             for (int row = 0; row < LIST_PAGE_ROWS; row++) {
                 const int pos = first + row;
                 if (pos >= s_list_count) break;
 
                 const love_event_t *event = &s_cfg.events[s_list_order[pos]];
                 const int row_top = LIST_ROW_TOP + row * LIST_ROW_PITCH;
-                const bool selected = (pos == s_sel);
-
-                // 选中块先铺,行内文字再按选中状态换色压在上面。
-                if (selected) ui_pixel_block(s_scr, 10, row_top - 3, 220, 48, COL_WHITE);
 
                 lv_obj_t *icon = lv_image_create(s_scr);
                 lv_image_set_src(icon, resolve_icon(event->icon));
@@ -1041,19 +1048,16 @@ static void render(void)
                 const bool has_category = event->category[0] != '\0';
                 if (has_category) {
                     const int cat_w = category_width(event->category);
-                    // 选中行的底色本来就是白的,再铺一块白标签等于没画,只在未选中时铺。
-                    if (!selected) ui_pixel_block(s_scr, 60, row_top + 3, cat_w, 15, COL_WHITE);
+                    ui_pixel_block(s_scr, 60, row_top + 3, cat_w, 15, COL_WHITE);
                     lv_obj_t *cat = cjk_small(s_scr, event->category, COL_INK);
                     lv_label_set_long_mode(cat, LV_LABEL_LONG_CLIP);
                     lv_obj_set_width(cat, cat_w - 6);
                     lv_obj_align(cat, LV_ALIGN_TOP_LEFT, 63, row_top + 5);
                 }
 
-                lv_obj_t *name = cjk_label(s_scr, event->name,
-                                           selected ? COL_INK : COL_WHITE);
+                lv_obj_t *name = cjk_label(s_scr, event->name, COL_WHITE);
                 lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
                 // 宽度**不能**铺到右列去:24px 的名字会压在右对齐的天数文案上。
-                // 120 让名字止于 x=180,最宽的天数文案("3 天前"约 40px)从 x≈188 起。
                 lv_obj_set_width(name, 120);
                 // 有分类时给分类标签让出一行,没有就整行靠中间一点。
                 lv_obj_align(name, LV_ALIGN_TOP_LEFT, 60,
@@ -1063,11 +1067,11 @@ static void render(void)
                 // 实际日期被夹在 1970..2099,最多 5 位数。
                 char days[24];
                 format_row_days(days, sizeof(days), event, today, holds);
-                lv_obj_t *day = cjk_small(s_scr, days, selected ? COL_INK : COL_WHITE);
+                lv_obj_t *day = cjk_small(s_scr, days, COL_WHITE);
                 lv_obj_align(day, LV_ALIGN_TOP_RIGHT, -12, row_top + 23);
             }
 
-            hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 打开 · 长按设置", COL_WHITE);
+            hint_obj = cjk_small(s_scr, "上/下 翻页 · 长按确定 设置", COL_WHITE);
             lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
             lv_screen_load(s_scr);
             return;
@@ -1119,12 +1123,10 @@ static void render(void)
         date_obj = cjk_small(s_scr, text, COL_WHITE);
         lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 250);
 
-        // 上/下 会进环上的第一个站:有"列表"事件时是列表屏,否则直接翻单页卡。
-        // 提示跟着实际情况改,别让用户按下去以为走错了屏。
-        const char *main_hint = "上/下 列表 · 长按确定 设置";
-        if (s_list_count == 0) {
-            main_hint = (s_page_count > 0) ? "上/下 切换 · 长按确定 设置" : "长按确定 设置";
-        }
+        // 主屏是轮播的两端:下键进第 1 页(有单页事件时就是第一张单页卡),上键进
+        // 最后一页。提示跟着是否真的有页改,别让用户按下去以为走错了屏。
+        const char *main_hint = (page_total() > 0) ? "上/下 翻页 · 长按确定 设置"
+                                                   : "长按确定 设置";
         // 调试模式开着时把提示换掉:这一屏可能整晚亮着,得让人一眼看出是"故意不睡的"。
         if (s_debug_mode) main_hint = "调试模式 · 不熄屏不深睡";
         hint_obj = cjk_small(s_scr, main_hint, COL_WHITE);
@@ -1139,18 +1141,9 @@ static void render(void)
     if (index >= s_cfg.event_count) index = s_cfg.event_count - 1;
     const love_event_t *event = &s_cfg.events[index];
 
-    // 页码按"这条属于哪一组"算:单页事件报它在单页里的位置,从列表点开的报它在列表
-    // 里的位置。直接拿事件总表的下标去报(比如"3/8")对用户没有任何意义 ——
-    // v4 起两种展示方式各成一组。
-    const uint8_t *group = (event->view_mode == LOVE_EVENT_VIEW_PAGE) ? s_page_order
-                                                                      : s_list_order;
-    const int group_count = (event->view_mode == LOVE_EVENT_VIEW_PAGE) ? s_page_count
-                                                                      : s_list_count;
-    const int group_pos = position_in(group, group_count, index);
-    s_page = ui_pixel_label(s_scr, "", &s_font_12, COL_WHITE);
-    lv_label_set_text_fmt(s_page, "%d/%d", group_pos >= 0 ? group_pos + 1 : index + 1,
-                          group_count > 0 ? group_count : 1);
-    lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
+    // 页码与列表页共用一套编号(见 build_page_label):单页卡是 1/total 这样的
+    // 整体序号,而不是"单页组里的第几条" —— 那样两套编号看不出前后关系。
+    build_page_label();
 
     // 这一屏的纵向坐标同样整块下移过:内容只占 166px,原来从 y=40 起,
     // 底部空出近百像素。现在从 68 起,上下留白各约 68px,和主屏、设置页一致。
@@ -1188,7 +1181,7 @@ static void render(void)
     lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 222);
 
     // 卡片上不再能改日期(日期一律在后台网页改),所以提示只说怎么走。
-    hint_obj = cjk_small(s_scr, "上/下 翻卡 · 长按确定 设置", COL_WHITE);
+    hint_obj = cjk_small(s_scr, "上/下 翻页 · 长按确定 设置", COL_WHITE);
     lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
 
     if (s_note[0]) {
@@ -1211,11 +1204,13 @@ static void refresh_dynamic(void)
         }
     }
 
-    if (s_page && s_view > VIEW_MAIN && s_cfg.event_count > 0) {
-        int index = s_view - 1;
-        const love_event_t *event = &s_cfg.events[index];
+    // 大数字只在**单页卡**上。列表页也有页码标签(s_page),但它没有大数字,所以
+    // 不能用 s_page 当"现在是单页卡"的判据 —— 这一版的页码在列表页上也会显示。
+    const int card = (s_view > VIEW_MAIN) ? s_view - 1 : -1;
+    if (card >= 0 && card < (int)s_cfg.event_count && s_big) {
+        const love_event_t *event = &s_cfg.events[card];
         love_date_t today;
-        if (time_today(&today) && s_big) {
+        if (time_today(&today)) {
             love_countdown_t countdown = love_event_countdown(event, today);
             if (!countdown.resolved) {
                 // 农历年份超出数据表:数字置回占位符,别显示上次算出来的旧值
@@ -1426,31 +1421,20 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     } else if (s_view == VIEW_STATUS) {
         handle_status_key(btn, ev, &action);
     } else if (s_view == VIEW_MAIN) {
-        // 主屏。上/下 进视图环(下键从头、上键从尾)。机身上**不再提供任何改日期的
-        // 入口**:日期、分类、展示方式一律在后台网页改,这里连确定键都不做动作。
+        // 主屏。上/下 进轮播:下键从头、上键从尾(两头对称,环才闭合)。机身上
+        // **不再提供任何改日期的入口**:日期、分类、展示方式一律在后台网页改,
+        // 这里连确定键都不做动作。
+        const int total = page_total();
         if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
-            goto_ring(0);
+            goto_slot(love_view_step(LOVE_VIEW_HOME, 1, total));
         } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
-            goto_ring(s_list_count + s_page_count - 1);
+            goto_slot(love_view_step(LOVE_VIEW_HOME, -1, total));
         } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
             open_settings();
         }
     } else {
-        // 列表屏或单页卡。列表里点开的那条"列表"事件虽然不在环上,但它的上/下走的是
-        // 列表那一组(见 move_in_list_group),所以这里要分开判。
-        const bool list_event_card = (s_view > VIEW_MAIN) &&
-                                     (s_cfg.events[s_view - 1].view_mode != LOVE_EVENT_VIEW_PAGE);
-        if (list_event_card) {
-            if (ev == BSP_BTN_CLICK && btn == BSP_BTN_DOWN) {
-                move_in_list_group(1);
-            } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_UP) {
-                move_in_list_group(-1);
-            } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-                open_settings();
-            }
-        } else {
-            handle_ring_key(btn, ev);
-        }
+        // 单页卡或列表页:都在轮播上,按键走同一条路。
+        handle_page_key(btn, ev);
     }
     bsp_lvgl_unlock();
 

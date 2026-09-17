@@ -110,17 +110,24 @@ static int query_slot(httpd_req_t *req)
     return atoi(value);
 }
 
-// 请求体必须是定长二进制(头像不是 JSON,不走 read_json)。
-static esp_err_t read_exact(httpd_req_t *req, uint8_t *buf, size_t expect)
+// 把请求体精确读满 len 字节。定长二进制(头像)与 JSON 两条读体路径共用这一段:
+// httpd_req_recv 一次可能只给一部分,必须循环到读满或出错。
+static esp_err_t recv_exact(httpd_req_t *req, char *buf, size_t len)
 {
-    if (req->content_len != (int)expect) return ESP_ERR_INVALID_SIZE;
     size_t got = 0;
-    while (got < expect) {
-        int ret = httpd_req_recv(req, (char *)buf + got, expect - got);
+    while (got < len) {
+        int ret = httpd_req_recv(req, buf + got, len - got);
         if (ret <= 0) return ESP_FAIL;
         got += (size_t)ret;
     }
     return ESP_OK;
+}
+
+// 请求体必须是定长二进制(头像不是 JSON,不走 read_json)。
+static esp_err_t read_exact(httpd_req_t *req, uint8_t *buf, size_t expect)
+{
+    if (req->content_len != (int)expect) return ESP_ERR_INVALID_SIZE;
+    return recv_exact(req, (char *)buf, expect);
 }
 
 // 读取并解析 JSON 请求体;失败时已回复错误响应。
@@ -138,17 +145,12 @@ static bool read_json(httpd_req_t *req, cJSON **out)
         return false;
     }
 
-    int received = 0;
-    while (received < req->content_len) {
-        int ret = httpd_req_recv(req, body + received, req->content_len - received);
-        if (ret <= 0) {
-            free(body);
-            send_error(req, "400 Bad Request", "读取请求体失败");
-            return false;
-        }
-        received += ret;
+    if (recv_exact(req, body, (size_t)req->content_len) != ESP_OK) {
+        free(body);
+        send_error(req, "400 Bad Request", "读取请求体失败");
+        return false;
     }
-    body[received] = '\0';
+    body[req->content_len] = '\0';
 
     cJSON *root = cJSON_Parse(body);
     free(body);

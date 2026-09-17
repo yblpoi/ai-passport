@@ -914,8 +914,20 @@ static void tick(lv_timer_t *timer)
 
 static void on_config_changed(void)
 {
+    // 后台改了配置:先重新载入,再把蓝牙启停对齐到新配置。
+    // 网页上的蓝牙开关只写配置;不在这里收敛的话要等下次重启才生效(实测踩过)。
+    // love_ble_stop() 会等 NimBLE host 任务退出,所以必须在持有 LVGL 锁之前调用。
+    love_config_t next;
+    love_store_load_config(&next);
+    const bool want_ble = next.ble_enabled != 0;
+    if (want_ble && !love_ble_running()) {
+        if (love_ble_start() != ESP_OK) ESP_LOGW(TAG, "蓝牙打开失败");
+    } else if (!want_ble && love_ble_running()) {
+        if (love_ble_stop() != ESP_OK) ESP_LOGW(TAG, "蓝牙关闭失败");
+    }
+
     if (!bsp_lvgl_lock(500)) return;
-    love_store_load_config(&s_cfg);
+    s_cfg = next;
     if (s_view > (int)s_cfg.event_count) s_view = s_cfg.event_count;
     render();
     bsp_lvgl_unlock();
@@ -1077,7 +1089,7 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         esp_err_t err = ESP_OK;
         if (want) {
             err = love_ble_start();
-        } else if (love_ble_ready()) {
+        } else if (love_ble_running()) {
             err = love_ble_stop();
         }
         if (err == ESP_OK) {

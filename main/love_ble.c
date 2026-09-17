@@ -201,6 +201,11 @@ bool love_ble_ready(void)
     return s_initialized && s_advertising;
 }
 
+bool love_ble_running(void)
+{
+    return s_initialized;
+}
+
 esp_err_t love_ble_start(void)
 {
     if (s_initialized) return ESP_OK;

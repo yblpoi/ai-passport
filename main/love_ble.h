@@ -21,4 +21,9 @@ void love_ble_device_name(char *buf, size_t size);
 
 esp_err_t love_ble_start(void);
 esp_err_t love_ble_stop(void);
+// 是否正在广播。注意启动过程中会短暂为 false。
 bool love_ble_ready(void);
+
+// 协议栈是否已经起来(包含"已启动但还没开始广播"的短暂状态)。
+// 要决定"该不该 stop"时用这个,别用 love_ble_ready() —— 否则启动途中会漏掉一次关闭。
+bool love_ble_running(void);

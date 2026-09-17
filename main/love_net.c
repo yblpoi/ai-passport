@@ -41,6 +41,10 @@ static size_t s_scan_count;
 static volatile bool s_scan_pending;
 
 static TickType_t s_ap_deadline;
+static TickType_t s_sta_down_since;   // 0 = 当前是连着的(或未配网)
+
+// 有凭据却连不上时,过这么久就自动把热点开起来兜底(见 love_net_poll)。
+#define AP_FALLBACK_AFTER_MS 60000
 
 static void lock(void)
 {
@@ -453,8 +457,34 @@ void love_net_ap_touch(void)
 // 由设置页/后台轮询:热点长时间无人访问时自动关闭,省电。
 void love_net_poll(void)
 {
-    if (!s_inited || !s_ap_requested) return;
+    if (!s_inited) return;
+
+    // 联网失败兜底:配过网却连不上时,自动把热点开起来当入口。
+    // 不这样做的话那种状态是"两头进不去"——配过网的设备开机不开热点(见 love_net_init),
+    // 局域网地址又不存在,用户只剩 USB 一条路。实测遇到过:手机热点一关,后台就再也进不去。
+    if (s_sta_ssid[0] != '\0' && s_state != LOVE_NET_CONNECTED) {
+        if (s_sta_down_since == 0) {
+            s_sta_down_since = xTaskGetTickCount();
+        } else if (!s_ap_requested &&
+                   (xTaskGetTickCount() - s_sta_down_since) >
+                       pdMS_TO_TICKS(AP_FALLBACK_AFTER_MS)) {
+            ESP_LOGW(TAG, "联网失败超过 %d 秒,自动打开热点作为入口",
+                     AP_FALLBACK_AFTER_MS / 1000);
+            s_ap_requested = true;
+            apply_mode();
+        }
+    } else {
+        s_sta_down_since = 0;
+    }
+
+    if (!s_ap_requested) return;
     if (s_sta_ssid[0] == '\0') return;   // 未配网时必须保留热点入口
+
+    // 联不上网时热点是唯一入口,不按空闲关闭;连上之后让它正常计时关闭。
+    if (s_state != LOVE_NET_CONNECTED) {
+        love_net_ap_touch();
+        return;
+    }
 
     if (xTaskGetTickCount() > s_ap_deadline) {
         ESP_LOGI(TAG, "热点空闲超时,自动关闭");

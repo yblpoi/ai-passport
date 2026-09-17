@@ -458,7 +458,10 @@ static int build_settings(setting_row_t *rows)
     count++;
 
     rows[count].label = "后台地址";
-    snprintf(rows[count].value, sizeof(rows[count].value), "%s", "192.168.4.1");
+    // 热点关着时 192.168.4.1 根本不可达,要显示设备当前真正可用的入口。
+    snprintf(rows[count].value, sizeof(rows[count].value), "%s",
+             net.site_url[0] ? net.site_url
+                             : (net.lan_url[0] ? net.lan_url : "不可达"));
     count++;
 
     rows[count].label = "热点密码";

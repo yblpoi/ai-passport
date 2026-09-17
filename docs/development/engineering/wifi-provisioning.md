@@ -164,3 +164,26 @@ goes back to the system heap. Keeping it alive permanently cost far more than it
 looks: on this device the largest contiguous free block fell from 69,632 to 34,816
 bytes after Bluetooth had been used once, and the Wi-Fi driver needs a large block
 to send a frame.
+
+### Security of this console
+
+The link itself is **not authenticated**: the NUS characteristics carry no
+`_WRITE_ENC` / `_AUTHEN` flags (`main/love_ble.c`) and no NimBLE security-manager
+fields are configured, so any central that connects may write commands without
+pairing. The protections are therefore in the console and in what the commands can
+reach:
+
+| Protection | Why |
+| --- | --- |
+| Bluetooth off by default, and the stack stops itself after five minutes with nobody connected | There is no link left to attack unless the owner turned it on |
+| `key`, `sleep`, `shot` and `debug on` are **USB only** | They would otherwise hand a nearby stranger a remote control for the UI, a way to force the device to sleep, or a way to keep it awake forever |
+| `wifi …`, `ap off` and `time <seconds>` require **on-device confirmation** when they arrive over Bluetooth — the screen shows what is being requested and waits up to 8 s for a press of the OK button (long-press rejects; timeout rejects) | These change persisted state or can lock the owner out. USB is exempt: holding the cable *is* physical presence |
+| The hotspot password is random per device and stored in NVS (shown on the screen) | It used to be derived from the MAC, so anyone who could see the SSID could compute it and then use the unauthenticated admin page |
+
+Known residual risks, deliberately not closed yet: `status` still prints the
+configured SSID, the LAN address and the owner's own event/category names; an
+attacker can still hold the single connection open to keep the radio (and ~51 KB of
+heap) busy and to block the owner; and there is no link-layer pairing, because
+requiring it costs real compatibility (iOS only pairs when a characteristic demands
+encryption, Android BLE terminals handle PIN pairing inconsistently, and
+`bleak` cannot pair at all on macOS).

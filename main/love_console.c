@@ -62,6 +62,26 @@ void love_console_out(const char *fmt, ...)
     if (s_out) s_out(buf, strlen(buf));
 }
 
+// 蓝牙链路上的危险命令要人在设备上按一下确定:那条链路近场可连、**不需要配对**
+// (见 docs/development/engineering/wifi-provisioning.md 的安全说明),所以"连上就等于
+// 拿到一台无口令终端"。改 Wi-Fi、关热点、改时间这三类会改变持久状态或把主人锁在外面,
+// 值得让主人按一下。USB 侧不要求 —— 插着线本身就是物理接触,而且在那里敲这些命令的
+// 正是主人自己(调试/救砖)。
+#define BLE_CONFIRM_TIMEOUT_MS 8000
+
+static bool command_allowed(love_console_src_t src, const char *action)
+{
+    if (src != LOVE_CONSOLE_SRC_BLE) return true;
+    return love_app_confirm_request(action, BLE_CONFIRM_TIMEOUT_MS);
+}
+
+static bool require_usb(love_console_src_t src, const char *what)
+{
+    if (src == LOVE_CONSOLE_SRC_USB) return true;
+    love_console_out("%s只能从 USB 串口做(插着线说明东西在你手边)。\n", what);
+    return false;
+}
+
 /* ---------- 命令实现 ---------- */
 
 static void print_wifi_status(void)
@@ -115,6 +135,13 @@ static int cmd_ap(void *ctx, int argc, char **argv)
         return 1;
     }
 
+    // 关热点会把局域网与热点两条入口一起关掉(手动关还会写进 NVS,重启也不再自动开),
+    // 有必要让主人按一下。开热点不拦:密码是每台随机的,开了也进不去。
+    if (!on && !command_allowed(src_of(ctx), "关闭后台热点")) {
+        love_console_out("未在设备上确认,已拒绝关热点。\n");
+        return 1;
+    }
+
     esp_err_t err = on ? love_net_ap_start() : love_net_ap_stop();
     if (err != ESP_OK) {
         love_console_out("热点%s失败: %s。\n", on ? "打开" : "关闭", esp_err_to_name(err));
@@ -123,9 +150,10 @@ static int cmd_ap(void *ctx, int argc, char **argv)
     love_console_out(on ? "热点已打开。\n" : "热点已关闭,之后不会再自动打开。\n");
     return 0;
 }
+
 static int cmd_wifi(void *ctx, int argc, char **argv)
 {
-    (void)ctx;
+    const love_console_src_t src = src_of(ctx);
 
     if (argc == 1) {
         print_wifi_status();
@@ -133,6 +161,10 @@ static int cmd_wifi(void *ctx, int argc, char **argv)
     }
 
     if (strcmp(argv[1], "clear") == 0) {
+        if (!command_allowed(src, "清除 Wi-Fi 凭据")) {
+            love_console_out("未在设备上确认,已拒绝清除凭据。\n");
+            return 1;
+        }
         if (love_net_forget() != ESP_OK) {
             love_console_out("清除凭据失败。\n");
             return 1;
@@ -155,6 +187,13 @@ static int cmd_wifi(void *ctx, int argc, char **argv)
 
     const char *ssid = argv[ssid_index];
     const char *pass = open ? "" : argv[ssid_index + 1];
+
+    // 写入凭据会把设备牵到另一个网络上(可能是攻击者的 AP),蓝牙链路上要求机身确认。
+    // 确认页只放得下一行说明,所以这里只报"要做什么",不倒用户名。
+    if (!command_allowed(src, open ? "连接一个开放 Wi-Fi" : "写入新的 Wi-Fi 凭据")) {
+        love_console_out("未在设备上确认,已拒绝写入凭据。\n");
+        return 1;
+    }
 
     esp_err_t err = love_net_set_credentials(ssid, pass);
     if (err != ESP_OK) {
@@ -204,7 +243,7 @@ static int cmd_ble(void *ctx, int argc, char **argv)
 
 static int cmd_time(void *ctx, int argc, char **argv)
 {
-    (void)ctx;
+    const love_console_src_t src = src_of(ctx);
 
     if (argc == 1) {
         love_time_state_t state;
@@ -229,6 +268,11 @@ static int cmd_time(void *ctx, int argc, char **argv)
     }
     if (value < LOVE_TIME_EPOCH_MIN || value > LOVE_TIME_EPOCH_MAX) {
         love_console_out("这个时间戳不在 2020–2100 之间,拒绝写入。\n");
+        return 1;
+    }
+    // 时间会写进 NVS,而且直接决定主屏"在一起多少天"显示什么,蓝牙链路上要机身确认。
+    if (!command_allowed(src, "把设备时间改成这个值")) {
+        love_console_out("未在设备上确认,已拒绝改时间。\n");
         return 1;
     }
     if (love_time_set((uint64_t)value, LOVE_TIME_SRC_CONSOLE) != ESP_OK) {
@@ -359,7 +403,9 @@ static int cmd_status(void *ctx, int argc, char **argv)
 // 列表、卡片、设置页的排版都验不了。参数上/下/确定/长按(长按=确定键长按)。
 static int cmd_key(void *ctx, int argc, char **argv)
 {
-    (void)ctx;
+    // **仅 USB**:它能驱动整个界面(包括开关蓝牙/热点、触发深睡眠),蓝牙链路上等于
+    // 把"遥控器"交给任何连上来的近场设备。它是调试工具,插着线时用就够了。
+    if (!require_usb(src_of(ctx), "按键注入")) return 1;
 
     bsp_btn_t btn;
     bsp_btn_ev_t ev = BSP_BTN_CLICK;
@@ -422,7 +468,7 @@ static const love_command_t COMMANDS[] = {
     // 发布流程按 docs/reference/y2lin/serial-screenshot-protocol.md 发的是这个字面量,
     // 所以它得是一条可用的命令名,而不是只写在文档里的约定。
     { "FAP_SCREENSHOT_V1", "同 shot", cmd_shot },
-    { "key",    "调试:注入一次按键 key up|down|ok|long(配合截图核对各屏)", cmd_key },
+    { "key",    "调试:注入一次按键 key up|down|ok|long(仅 USB)", cmd_key },
     { "help",   "列出所有命令", cmd_help },
 };
 

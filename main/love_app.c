@@ -26,6 +26,8 @@
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "lvgl.h"
 
 #include <stdio.h>
@@ -59,6 +61,8 @@ static const char *TAG = "love_app";
 // 事件列表屏(分页,一屏 4 条)。也是负数,所以**不能**再用 s_view ± 1 在视图之间跳:
 // -3 加一会串到 VIEW_STATUS(-2) 去。按键一律走显式分支。
 #define VIEW_LIST     (-3)
+// 蓝牙危险命令的机身确认页(见 love_app_confirm_request)。同样是负数,按键走显式分支。
+#define VIEW_CONFIRM  (-4)
 
 #define SETTINGS_ROWS 9
 
@@ -120,6 +124,21 @@ static int s_note_ttl;
 // 熄屏:最后一次按下的时刻(esp_timer 微秒)与当前是否已熄屏。
 static int64_t s_last_input_us;
 static bool s_screen_off;
+
+// 蓝牙链路上的危险命令要人在机身上按一下确定才执行(见 love_app_confirm_request):
+// 蓝牙是"近场但无需配对"的链路,任何人在旁边连上就能敲命令。结论用信号量交给
+// 正在等待的控制台任务;超时由 tick 判定为拒绝。
+static SemaphoreHandle_t s_confirm_done;
+static volatile int s_confirm_verdict;   // 0 = 未决,1 = 允许,-1 = 拒绝
+static const char *s_confirm_text;
+static int64_t s_confirm_deadline_us;
+
+// 请 LVGL 任务代劳一次重绘(非 LVGL 任务只置旗子)。
+// 为什么不直接调 render():重绘要走 LVGL 的控件创建与排版,实测在 4KB 栈的控制台任务上
+// 只剩两三百字节余量(设置页那条路测到过 324);而确认页是**攻击者能触发**的路径
+// (BLE 上敲 wifi / ap off / time),不能让一次远程敲击把控制台任务顶穿。tick 每秒都跑,
+// 最坏晚一秒出画面,而窗口有 8 秒。
+static volatile bool s_render_request;
 
 static void render(void);
 static void set_note(const char *text);
@@ -593,6 +612,22 @@ static void status_info_lines(char lines[STATUS_INFO_ROWS][40])
     }
 }
 
+// 确认页的按键:短按确定 = 允许,长按确定 = 拒绝。其它键一概不理 —— 这一页只有两个
+// 选择,别让上/下把它翻走、也别让"顺手一按"变成允许(长按要刻意按,拒绝更安全)。
+// 结论用信号量交给正在等待的控制台任务;界面收尾由那个请求方做(它本来就要重绘回去)。
+static void handle_confirm_key(bsp_btn_t btn, bsp_btn_ev_t ev)
+{
+    if (btn != BSP_BTN_OK) return;
+    if (ev == BSP_BTN_LONG) {
+        s_confirm_verdict = -1;
+    } else if (ev == BSP_BTN_CLICK) {
+        s_confirm_verdict = 1;
+    } else {
+        return;
+    }
+    if (s_confirm_done) xSemaphoreGive(s_confirm_done);
+}
+
 // 本机状态页:七项自身状态 + 最近一次休眠结果,下面两项可执行的休眠操作。
 static void build_status_page(void)
 {
@@ -835,6 +870,28 @@ static void render(void)
     // 右上角电量;取不到时显示 "--",不阻塞界面。
     // 状态页已经单列一行电量,不再重复画一个。
     if (s_view != VIEW_STATUS) build_battery(s_scr);
+
+    if (s_view == VIEW_CONFIRM) {
+        // 蓝牙危险命令的确认页。**用 24px 正文档**:这一页要"一眼看清要允许什么",
+        // 12px 在正常观看距离下偏小(真机反馈)。像素字体只有 12/24/36 三档,
+        // 非整数倍放大会让笔画不匀,所以放大就是换档,不能设字号。
+        // 动作文案最长的"写入新的 Wi-Fi 凭据"在 200px 宽下会折成两行,面板留了余量。
+        lv_obj_t *title = cjk_label(s_scr, "蓝牙请求", COL_WHITE);
+        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 40);
+
+        lv_obj_t *panel = ui_pixel_panel_create(s_scr, 12, 84, 216, 132, UI_PAPER);
+        lv_obj_t *what = ui_pixel_label(panel, s_confirm_text ? s_confirm_text : "",
+                                        &s_font_24, UI_INK);
+        lv_obj_set_width(what, 200);
+        lv_label_set_long_mode(what, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(what, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(what, LV_ALIGN_CENTER, 0, 0);
+
+        hint_obj = cjk_small(s_scr, "确定 允许 · 长按确定 拒绝", COL_WHITE);
+        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
+        lv_screen_load(s_scr);
+        return;
+    }
 
     if (s_view == VIEW_SETTINGS) {
         setting_row_t rows[SETTINGS_ROWS];
@@ -1107,6 +1164,13 @@ static void tick(lv_timer_t *timer)
     love_net_poll();
     blank_off_poll();
 
+    // 有人请了一次重绘(确认页出现/撤掉这类"非 LVGL 任务触发的画面变化")。
+    if (s_render_request) {
+        s_render_request = false;
+        render();
+        return;
+    }
+
     love_date_t today;
     bool holds = time_today(&today);
     int day_key = holds ? (int)love_days_from_civil(today) : -1;
@@ -1122,6 +1186,14 @@ static void tick(lv_timer_t *timer)
         s_note[0] = '\0';
         render();
         return;
+    }
+
+    // 确认页超时 = 拒绝。等结论的那个任务(蓝牙控制台)正睡在信号量上,这里放它走。
+    if (s_view == VIEW_CONFIRM && s_confirm_deadline_us != 0 &&
+        esp_timer_get_time() > s_confirm_deadline_us) {
+        s_confirm_deadline_us = 0;
+        s_confirm_verdict = -1;
+        if (s_confirm_done) xSemaphoreGive(s_confirm_done);
     }
 
     // 状态页的运行时长、剩余内存、休眠结果本来就是逐秒在变,整页重绘最省事;
@@ -1267,7 +1339,9 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 
     if (!bsp_lvgl_lock(400)) return;
 
-    if (s_view == VIEW_SETTINGS) {
+    if (s_view == VIEW_CONFIRM) {
+        handle_confirm_key(btn, ev);
+    } else if (s_view == VIEW_SETTINGS) {
         handle_settings_key(btn, ev, &action);
     } else if (s_view == VIEW_STATUS) {
         handle_status_key(btn, ev, &action);
@@ -1404,6 +1478,49 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 }
 
 /* ---------- 生命周期 ---------- */
+
+
+bool love_app_confirm_request(const char *action, uint32_t timeout_ms)
+{
+    if (!action || timeout_ms == 0) return false;
+    if (s_confirm_done == NULL) {
+        s_confirm_done = xSemaphoreCreateBinary();
+        // 拿不到信号量就不放行:这是安全闸门,失败要往"拒绝"一侧倒。
+        if (!s_confirm_done) return false;
+    }
+    (void)xSemaphoreTake(s_confirm_done, 0);   // 清掉上一次的残留
+
+    if (!bsp_lvgl_lock(500)) return false;
+    s_confirm_text = action;
+    s_confirm_verdict = 0;
+    s_confirm_deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    note_input();      // 别让确认页刚出来就被熄屏吃掉
+    screen_wake();
+    s_view = VIEW_CONFIRM;
+    s_sel = 0;
+    s_render_request = true;   // 画面交给 LVGL 任务画(见 s_render_request 的说明)
+    bsp_lvgl_unlock();
+
+    // 等结论:按键(handle_confirm_key)或 tick 超时都会 give。多等 500ms 给 tick 留余量。
+    const bool got = xSemaphoreTake(s_confirm_done, pdMS_TO_TICKS(timeout_ms + 500)) == pdTRUE;
+    const bool approved = got && s_confirm_verdict == 1;
+
+    if (bsp_lvgl_lock(500)) {
+        s_confirm_verdict = 0;
+        s_confirm_text = NULL;
+        s_confirm_deadline_us = 0;
+        // 确认页撤掉后回主屏:原来的视图状态(选中行/翻到哪张卡)本来就没打算保留,
+        // 回主屏是唯一不会出错的选择。
+        if (s_view == VIEW_CONFIRM) {
+            s_view = VIEW_MAIN;
+            s_sel = 0;
+        }
+        s_render_request = true;
+        bsp_lvgl_unlock();
+    }
+    note_input();      // 刚才那一下是"在设备上按的",熄屏计时从此刻算起
+    return approved;
+}
 
 void love_app_enter(void)
 {

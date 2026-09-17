@@ -83,6 +83,12 @@ button.ghost{background:#fff}
 .icons .avabar .muted{font-size:12px}
 .event{border:3px dashed var(--ink); padding:10px; margin-top:12px; background:#fff}
 .event .head{display:flex; justify-content:space-between; align-items:center; font-size:13px; font-weight:700}
+/* 事件卡标题右侧的一排操作。刻意不用 .row —— .row>*{flex:1 1 auto} 会把按钮拉满整行。 */
+.event .headbtns{display:flex; gap:6px; align-items:center; flex:0 0 auto}
+.event .headbtns button{padding:4px 8px; font-size:13px; font-weight:600}
+.event .headbtns button:disabled{opacity:.35; cursor:default; box-shadow:2px 2px 0 #bbb}
+/* 收起时只留标题行。hidden 属性在 div 上默认生效,这里显式写是为了和 .icons 一致。 */
+.event .body[hidden]{display:none}
 .kv{display:flex; justify-content:space-between; font-size:13px; padding:4px 0; border-bottom:1px dashed #bbb}
 .kv:last-child{border-bottom:0}
 .kv b{font-weight:600}

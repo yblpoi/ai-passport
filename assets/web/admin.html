@@ -77,6 +77,14 @@
 
   <div class="card">
     <h2>显示</h2>
+    <label for="displayMode">展示模式</label>
+    <select id="displayMode">
+      <option value="1">单页（每个事件独占一屏）</option>
+      <option value="0">列表（一屏 4 条，可按分类分组）</option>
+    </select>
+    <p class="muted">列表模式下，主屏按上/下键进入事件列表：一屏 4 条、分页显示，选中一条按确定进入它的单页卡，
+      在卡片里翻到头会退回列表。<b>同一分类的事件会排在一起</b>，分组顺序由下面事件卡的上移/下移决定
+      （取每个分类里第一条的位置），组内按“距今远近”排，农历超出范围的排最后。没有分类的事件统一排在最后。</p>
     <label for="blankOff">自动熄屏</label>
     <select id="blankOff">
       <option value="15">15 秒</option>
@@ -94,7 +102,9 @@
     <div class="row" style="margin-top:12px">
       <button type="button" class="accent" id="addEvent">＋ 添加事件</button>
     </div>
-    <p class="muted">“每年重复”适合生日和节日，会自动折算到下一次发生日；“仅一次”用于具体的纪念日，过期后显示已过天数。</p>
+    <datalist id="categoryOptions"></datalist>
+    <p class="muted">“每年重复”适合生日和节日，会自动折算到下一次发生日；“仅一次”用于具体的纪念日，过期后显示已过天数。
+      <b>分类</b>留空表示不分类；填过的分类名会在输入时提示，也可以点卡片的“收起”把长列表压短再上下移。</p>
   </div>
 
   <div class="card">

@@ -321,6 +321,17 @@ function renderPreview(){
     setAvatarImg(byId("pvEventIcon"), e.icon);
   }
   byId("eventCount").textContent = model.events.length ? `共 ${model.events.length} 条` : "还没有事件";
+  updatePreviewHint();
+}
+
+// 底部提示行要跟真机一致:农历事件的卡片提示不同,列表模式下主屏的上/下是"进列表"。
+// 单独成函数是因为它同时依赖"当前预览哪个屏"和"展示模式",两边都要能触发刷新。
+function updatePreviewHint(){
+  const main = byId("pvMainView").style.display !== "none";
+  const lunarFirst = model.events[0] && model.events[0].kind === 2;
+  byId("pvHint").textContent = main
+    ? (model.displayMode === 0 ? "上/下 列表 · 长按确定 设置" : "上/下 切换 · 长按确定 设置")
+    : (lunarFirst ? "确定 改农历日期" : "确定 改日期");
 }
 
 // 切换预览视图时，页码与底部提示行也要跟真机一致。
@@ -330,11 +341,7 @@ function showPreviewView(which){
   byId("pvEventView").style.display = main ? "none" : "";
   byId("pvEventPage").style.display = main ? "none" : "";
   byId("pvEventPage").textContent = "1/" + model.events.length;
-  // 农历事件的提示行和公历不一样，这点也要跟设备端 love_app.c 对上
-  const lunarFirst = model.events[0] && model.events[0].kind === 2;
-  byId("pvHint").textContent = main
-    ? "上/下 切换 · 长按确定 设置"
-    : (lunarFirst ? "确定 改农历日期" : "确定 改日期");
+  updatePreviewHint();
 }
 
 function iconPicker(container, onPick, selected, onAvatarChanged){
@@ -404,6 +411,8 @@ function iconPicker(container, onPick, selected, onAvatarChanged){
 function renderAll(){
   byId("start").value = model.start;
   byId("blankOff").value = String(model.blankOff ?? 30);
+  // 展示模式:缺字段时按设备的出厂默认(单页)显示,别让选择器停在一个空值上。
+  byId("displayMode").value = String(model.displayMode ?? 1);
   byId("bleEnabled").value = model.bleEnabled ? "1" : "0";
   byId("nameA").value = model.people[0].name;
   byId("nameB").value = model.people[1].name;
@@ -416,17 +425,66 @@ function renderAll(){
 }
 
 const openIcon = new Set();   // 头像选择器处于展开状态的事件下标
+const collapsed = new Set();  // 处于"收起"状态的事件卡下标
+
+// 把用户填的文本放进 HTML 属性/文本里。名字与分类都是用户自由输入的,
+// 里面带个引号或尖括号就会把这段模板撑坏。
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
+  (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+// 用户填过的分类名(去重、按首次出现排序),给分类输入框的 datalist 用 ——
+// 少手打一遍就少一次把"生日"写成"生日 "那样的错。
+function usedCategories(){
+  const seen = [];
+  model.events.forEach((e) => {
+    const c = (e.category || "").trim();
+    if(c && !seen.includes(c)) seen.push(c);
+  });
+  return seen;
+}
+
+function updateCategoryOptions(){
+  const list = byId("categoryOptions");
+  if(!list) return;
+  list.innerHTML = usedCategories().map((c) => `<option value="${esc(c)}"></option>`).join("");
+}
+
+// 上移/下移只改持久顺序(设备端的显示分组顺序由它决定),不改任何事件的内容。
+function moveEvent(idx, delta){
+  const to = idx + delta;
+  if(to < 0 || to >= model.events.length) return;
+  const [moved] = model.events.splice(idx, 1);
+  model.events.splice(to, 0, moved);
+  remapIndexSets(idx, to);
+  renderEvents(); renderPreview();
+}
+
+// 两条事件换位后,把"按下标记录"的两套界面状态跟着搬过去。
+// 不搬的话,收起/展开的会是换位之后的另一条,看起来像随机跳动。
+function remapIndexSets(from, to){
+  [openIcon, collapsed].forEach((set) => {
+    const hadFrom = set.has(from);
+    const hadTo = set.has(to);
+    set.delete(from);
+    set.delete(to);
+    if(hadTo) set.add(from);
+    if(hadFrom) set.add(to);
+  });
+}
 
 function renderEvents(){
   const host = byId("events");
   host.innerHTML = "";
+  updateCategoryOptions();
   if(!model.events.length){
     openIcon.clear();
+    collapsed.clear();
     host.innerHTML = '<p class="muted">还没有事件，点下面的按钮添加。</p>';
     return;
   }
   model.events.forEach((e, idx) => {
     const open = openIcon.has(idx);
+    const isCollapsed = collapsed.has(idx);
     const iconLabelText = iconLabel(e.icon);
     const iconSrcText = iconSrc(e.icon);
     const isLunar = e.kind === 2;
@@ -444,10 +502,24 @@ function renderEvents(){
 
     const box = document.createElement("div");
     box.className = "event";
+    // 标题上带上名字:收起之后仍要知道这是哪一条,不然只能靠逐条展开找。
     box.innerHTML = `
-      <div class="head"><span>事件 ${idx+1}</span>
-        <button type="button" class="ghost" data-remove="${idx}">删除</button></div>
-      <label>名称</label><input type="text" maxlength="8" data-name="${idx}" value="${e.name}">
+      <div class="head">
+        <span>事件 ${idx+1}${e.name ? " · " + esc(e.name) : ""}</span>
+        <span class="headbtns">
+          <button type="button" class="ghost tile" data-move="${idx}" data-delta="-1"
+                  title="上移"${idx === 0 ? " disabled" : ""}>↑</button>
+          <button type="button" class="ghost tile" data-move="${idx}" data-delta="1"
+                  title="下移"${idx === model.events.length - 1 ? " disabled" : ""}>↓</button>
+          <button type="button" class="ghost" data-collapse="${idx}">${isCollapsed ? "展开" : "收起"}</button>
+          <button type="button" class="ghost" data-remove="${idx}">删除</button>
+        </span>
+      </div>
+      <div class="body"${isCollapsed ? " hidden" : ""}>
+      <label>名称</label><input type="text" maxlength="8" data-name="${idx}" value="${esc(e.name)}">
+      <label>分类 <span class="muted">留空 = 不分类</span></label>
+      <input type="text" maxlength="8" list="categoryOptions" data-category="${idx}"
+             value="${esc(e.category)}" placeholder="例如 生日、节日、家人">
       <label>重复方式</label>
       <select data-kind="${idx}">
         <option value="0"${e.kind===0?" selected":""}>每年重复（生日 / 节日）</option>
@@ -468,7 +540,8 @@ function renderEvents(){
           <img class="${e.icon >= ICONS.length ? "rounded" : ""}" src="${iconSrcText}" alt="${iconLabelText}"></button>
         <button type="button" class="ghost" data-toggle="${idx}">${open ? "收起" : "更换"}</button>
       </div>
-      <div class="icons" data-icons="${idx}"${open ? "" : " hidden"}></div>`;
+      <div class="icons" data-icons="${idx}"${open ? "" : " hidden"}></div>
+      </div>`;
     host.appendChild(box);
     iconPicker(box.querySelector(`[data-icons="${idx}"]`),
       (i)=>{ model.events[idx].icon = i; openIcon.delete(idx); renderEvents(); renderPreview(); },
@@ -479,14 +552,31 @@ function renderEvents(){
     if(openIcon.has(i)) openIcon.delete(i); else openIcon.add(i);
     renderEvents();
   });
+  host.querySelectorAll("[data-collapse]").forEach(b => b.onclick = () => {
+    const i = Number(b.dataset.collapse);
+    if(collapsed.has(i)) collapsed.delete(i); else collapsed.add(i);
+    // 收起时把头像选择器也收掉,否则展开回来会发现它莫名其妙开着。
+    openIcon.delete(i);
+    renderEvents();
+  });
+  host.querySelectorAll("[data-move]").forEach(b => b.onclick = () => {
+    moveEvent(Number(b.dataset.move), Number(b.dataset.delta));
+  });
   host.querySelectorAll("[data-remove]").forEach(b => b.onclick = () => {
     const i = Number(b.dataset.remove);
     model.events.splice(i, 1);
-    openIcon.clear();          // 下标会整体前移，展开状态不再有意义
+    // 下标会整体前移,两套按下标记录的状态都不再有意义。
+    openIcon.clear();
+    collapsed.clear();
     renderEvents(); renderPreview();
   });
   host.querySelectorAll("[data-name]").forEach(i => i.oninput = () => {
     model.events[Number(i.dataset.name)].name = i.value; renderPreview();
+  });
+  host.querySelectorAll("[data-category]").forEach(i => i.oninput = () => {
+    model.events[Number(i.dataset.category)].category = i.value;
+    // 只刷 datalist,不重建列表 —— 重建会让正在输入的这个框失去焦点。
+    updateCategoryOptions();
   });
   host.querySelectorAll("[data-date]").forEach(i => i.onchange = () => {
     model.events[Number(i.dataset.date)].date = i.value; renderPreview();
@@ -568,11 +658,16 @@ byId("addEvent").onclick = () => {
   if(model.events.length >= 8){ toast("最多 8 条事件"); return; }
   const today = currentToday();
   const iso = today.y + "-" + String(today.m).padStart(2,"0") + "-" + String(today.d).padStart(2,"0");
-  model.events.push({name:"新的纪念日", icon:6, kind:0, date:iso});
+  // category 显式给空串:让"新加的这条确实没有分类",而不是靠后端按同下标保留旧值。
+  model.events.push({name:"新的纪念日", icon:6, kind:0, date:iso, category:""});
   renderEvents(); renderPreview();
 };
 byId("start").onchange = (e) => { model.start = e.target.value; renderPreview(); };
 byId("blankOff").onchange = (e) => { model.blankOff = Number(e.target.value); };
+byId("displayMode").onchange = (e) => {
+  model.displayMode = Number(e.target.value);
+  renderPreview();   // 主屏提示行会跟着模式变
+};
 byId("bleEnabled").onchange = (e) => { model.bleEnabled = e.target.value === "1"; };
 byId("nameA").oninput = (e) => { model.people[0].name = e.target.value; renderPreview(); };
 byId("nameB").oninput = (e) => { model.people[1].name = e.target.value; renderPreview(); };

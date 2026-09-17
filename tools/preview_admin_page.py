@@ -143,6 +143,19 @@ class Handler(BaseHTTPRequestHandler):
         payload = self.rfile.read(length) if length else b""
         path, _, query = self.path.partition("?")
 
+        # 保存配置:写回 mock,这样"改顺序/分类/展示模式 → 保存 → 重新载入"在本地
+        # 就能看到结果。真机的 handle_config 还会对**缺失**字段保留原值(浏览器缓存的
+        # 旧 admin.js 不带 displayMode / category),本页的 admin.js 每次都发全量字段,
+        # 所以这里直接整体替换 —— 那条兼容逻辑要靠真机验。
+        if path == "/api/config":
+            try:
+                incoming = json.loads(payload.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return self._error(400, "请求体不是合法 JSON")
+            if not isinstance(incoming, dict):
+                return self._error(400, "请求体必须是对象")
+            MOCK_STATE["config"] = incoming
+
         # 自定义头像:和真机一样按 slot 存定长 4bpp 数据,方便本地把上传流程走通。
         if path in ("/api/avatar", "/api/avatar/clear"):
             slot = _query_slot(query)
@@ -162,6 +175,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # 本地预览一律禁缓存:改完 admin.js / admin.css 普通刷新拿到的还是旧文件,
+        # 会让人以为改动没生效(真机那边靠固件版本号变化,不存在这个问题)。
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 

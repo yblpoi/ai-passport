@@ -1,4 +1,4 @@
-// main/love_date.h —— 恋爱倒计时的纯逻辑层:公历换算、天数差、年度事件折算。
+// main/love_date.h —— 纪念日摆件的纯逻辑层:公历换算、天数差、年度事件折算。
 //
 // 本文件不依赖 ESP-IDF 与 LVGL,可被 host tests 直接编译覆盖
 // (tests/test_love_date.c)。界面、NVS、网络一律在应用层,不要往这里塞。

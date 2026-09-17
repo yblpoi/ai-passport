@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""恋爱倒计时像素素材生成器（无第三方依赖）。
+"""纪念日摆件像素素材生成器（无第三方依赖）。
 
 同一份 8x8 像素掩码同时产出两路结果，保证设备界面与后台网页的视觉完全一致：
 
@@ -34,9 +34,20 @@ ICON_SCALE = 5   # 8 -> 40，整数倍放大才不会有半像素
 ICON_PX = MASK_PX * ICON_SCALE
 BG_TILE_PX = 48
 
-# 为什么不做"圆形头像底座"：圆形必然裁掉方形图标的四角，实测 16 个角色里有 15 个
-# 会掉实心像素（猫咪少 186 个、礼物少 284 个，耳朵和边角直接被切平）。
-# 8x8 角色本身的轮廓已经够辨识，保留完整造型比套圆牌更重要。
+# 头像的圆角半径(像素),内置图标与自定义头像用同一个值。
+#
+# 为什么不做"圆形头像底座"(旧结论,仍成立):圆形必然裁掉方形图标的四角,实测 16 个
+# 角色里有 15 个会掉实心像素(猫咪少 186 个、礼物少 284 个,耳朵和边角直接被切平)。
+# 现在采纳的是**轻圆角**:半径 4px 下四角一共只裁 17 个画布像素,而 16 个图标里
+# 9 个四角本来就是空的(它们是透明背景的图形,不是方牌),真正被裁到实心像素的合计
+# 只有 64 个 —— 星星/蛋糕/礼物各 12、叶子 8、猫/狗/熊/狐狸各 5。这远比圆形温和,
+# 换取自定义头像(照片,满幅方角)不再生硬。
+#
+# 圆角同时作用于设备端 I4 数据、导出的 PNG 与网页 data URI:它们都由同一份
+# arrays 生成,置成 TRANSPARENT 即可,因为图标调色板的索引 0 固定是透明。
+ICON_CORNER_RADIUS = 4
+
+TRANSPARENT = (0, 0, 0, 0)
 
 # 与 main/ui_pixel.h 的配色保持一致，避免设备与网页出现两套颜色。
 PALETTE = {
@@ -271,6 +282,30 @@ def scale(rows, factor: int):
     return out
 
 
+def round_corners(rows, radius: int):
+    """把画布四角裁成圆角:像素中心落在圆角矩形之外的位置置为透明。
+
+    判定用像素中心((x+0.5, y+0.5))对角落弧心的距离,等价于 CSS 的
+    border-radius 在整数像素下的取整结果。只作用于图标,底纹不动。"""
+    if radius <= 0:
+        return rows
+
+    height, width = len(rows), len(rows[0])
+    out = [list(row) for row in rows]
+    for y in range(height):
+        for x in range(width):
+            # 不在任何角落方块内就不必判定
+            arc_x = radius - 0.5 if x < radius else (
+                width - radius - 0.5 if x >= width - radius else None)
+            arc_y = radius - 0.5 if y < radius else (
+                height - radius - 0.5 if y >= height - radius else None)
+            if arc_x is None or arc_y is None:
+                continue
+            if (x + 0.5 - arc_x) ** 2 + (y + 0.5 - arc_y) ** 2 > radius * radius:
+                out[y][x] = TRANSPARENT
+    return out
+
+
 def write_png(path: Path, rows: list[list[tuple[int, int, int, int]]]) -> None:
     """手写最小 PNG 编码器，避免引入 Pillow 依赖。"""
     height = len(rows)
@@ -343,7 +378,8 @@ def main() -> None:
     arrays: list[tuple[str, list[list[tuple[int, int, int, int]]]]] = []
 
     for name, label, mask in ICONS:
-        arrays.append((name, scale(parse_mask(mask), ICON_SCALE)))
+        rows = round_corners(scale(parse_mask(mask), ICON_SCALE), ICON_CORNER_RADIUS)
+        arrays.append((name, rows))
         icons.append((name, label))
 
     c_lines = [

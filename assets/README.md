@@ -17,7 +17,7 @@ Store reusable font files and generated font sources in `fonts/`.
 - Check Flash and internal-RAM impact before adding a font; the ESP32-C3 has no PSRAM.
 - Do not commit fonts whose license does not permit redistribution.
 
-### love_font_12 / love_font_24 / love_font_36 (pixel fonts for the love countdown play)
+### love_font_12 / love_font_24 / love_font_36 (pixel fonts for the commemorative-day display)
 
 The device UI uses a **bitmap pixel font** so it matches the pixel icons and the
 pixel heart wallpaper. Only these three sizes are allowed.
@@ -119,7 +119,7 @@ Store reusable source images and generated display assets in `images/`.
 - Preserve editable sources where licensing permits, and record the source and license.
 - Never commit device QR secrets, credentials, or personal data in images.
 
-### Love countdown pixel art (love_pixel_art)
+### Commemorative-day pixel art (love_pixel_art)
 
 - Source: `images/love_pixel_art_gen.py` (8×8 pixel masks plus a palette, no
   third-party dependencies).
@@ -140,10 +140,21 @@ Store reusable source images and generated display assets in `images/`.
 - The palette order is the 4 bpp index order for uploaded custom avatars
   (`PALETTE_ORDER`). **Changing it recolors every avatar already uploaded**, so it
   is written out explicitly rather than relying on dict order.
-- Why there is no circular avatar chip: a circle necessarily clips the four
-  corners of a square icon, and 15 of the 16 characters lost solid pixels in
-  testing (the cat lost 186, the gift 284 — ears and corners got flattened).
-  Keeping the full silhouette matters more.
+- Avatar corner rounding: radius **4 px**, set by `ICON_CORNER_RADIUS`. A **circular**
+  chip is still rejected: measured, a circle clips solid pixels off 15 of the 16
+  characters (the cat loses 186, the gift 284 — ears and corners get flattened).
+  A 4 px rounding is far milder: the four corners clip 17 canvas pixels in total,
+  8 of the 16 icons already have empty corners (they are shapes on a transparent
+  background, not square tiles), and only 64 pixels of real artwork are removed
+  across all sixteen — 12 each on the star, cake and gift, 8 on the leaf, 5 each
+  on the cat, dog, bear and fox. It is what keeps an uploaded photo from looking
+  hard-edged.
+  The radius must match in three places: this file, `AVATAR_CORNER_RADIUS` in
+  `main/love_app.c` (the custom-avatar palette has no transparent entry, so the
+  corners can only be masked to alpha 0 while decoding to ARGB8888), and
+  `assets/web/admin.css`. Built-in icons instead get their corner pixels set to
+  transparent at generation time (palette index 0 is transparent), which keeps the
+  I4 data, the exported PNGs and the web data URIs consistent automatically.
 - Conversion steps: run `python3 assets/images/love_pixel_art_gen.py` from the
   repository root. Re-running after a mask change updates device and web assets
   together.

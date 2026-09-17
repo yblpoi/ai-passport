@@ -62,6 +62,13 @@ button.ghost{background:#fff}
   width:46px; padding:4px; background:#fff; box-shadow:none; border:3px solid var(--ink);
 }
 .iconcur img{width:100%; image-rendering:pixelated; display:block}
+/* 头像的轻圆角。半径 4px 在三个地方必须一致:这里、love_pixel_art_gen.py 的
+   ICON_CORNER_RADIUS(内置图标在生成时就把角落像素变透明)、love_app.c 的
+   AVATAR_CORNER_RADIUS(自定义头像解码时把角落 alpha 置 0,因为它的调色板没有
+   透明项)。内置像素图标四角本来就是空的,这条主要作用在自定义头像(照片)上。
+   设备预览里随 --s 一起缩放。 */
+.icons img,.iconcur img{border-radius:4px}
+.screen .s-person img,.screen .s-event-icon img{border-radius:calc(4px * var(--s))}
 /* 自定义头像槽位：空槽显示"＋"，点一下直接选图上传 */
 .icons button.empty{border-style:dashed; border-color:#bbb; background:#FAFAF4}
 .icons button.empty .plus{

@@ -1,4 +1,4 @@
-// main/love_app.c —— 像素风恋爱倒计时界面与按键逻辑。
+// main/love_app.c —— 像素风纪念日摆件的界面与按键逻辑。
 //
 // 三个视图:主屏(在一起 N 天)、事件卡(逐个切换)、设置页(长按确定键)。
 // 所有 LVGL 访问都在 bsp_lvgl_lock() 内;NVS 落盘、热点开关等慢操作放在锁外。
@@ -240,6 +240,27 @@ static lv_image_dsc_t s_avatar_dsc[AVATAR_DECODE_MAX];
 static int s_avatar_slot[AVATAR_DECODE_MAX];
 static int s_avatar_used;
 
+// 头像圆角:半径必须与 assets/images/love_pixel_art_gen.py 的 ICON_CORNER_RADIUS 一致。
+// 内置图标是在生成器里把角落像素改成透明的(调色板索引 0 即透明),自定义头像的
+// 调色板没有透明项,只能在这里解码时把角落的 alpha 置 0 —— 两边视觉上才是同一套圆角。
+// 存的 4bpp 数据不动,所以上传、存储、网页缩略图都不受影响。
+#define AVATAR_CORNER_RADIUS 4
+
+// 用整数判定,避免浮点:把坐标整体放大 2 倍(像素中心在 (2x+1, 2y+1),
+// 弧心在 (2r-1, 2r-1)),比较式与生成器里的 (x+0.5-arc)² + … > r² 完全等价。
+static bool avatar_corner_cut(int x, int y)
+{
+    const int r = AVATAR_CORNER_RADIUS;
+    int dx2 = -1, dy2 = -1;
+    if (x < r) dx2 = 2 * (x - r + 1);
+    else if (x >= LOVE_ICON_PX - r) dx2 = 2 * (x - (LOVE_ICON_PX - r) + 1);
+    if (y < r) dy2 = 2 * (y - r + 1);
+    else if (y >= LOVE_ICON_PX - r) dy2 = 2 * (y - (LOVE_ICON_PX - r) + 1);
+
+    if (dx2 < 0 || dy2 < 0) return false;   // 不在角落方块内
+    return dx2 * dx2 + dy2 * dy2 > 4 * r * r;
+}
+
 static const lv_image_dsc_t *resolve_icon(uint8_t icon)
 {
     if (icon < LOVE_ICON_MAX) return love_pixel_icon(icon);
@@ -259,16 +280,19 @@ static const lv_image_dsc_t *resolve_icon(uint8_t icon)
 
     const int idx = s_avatar_used++;
     uint8_t *dst = s_avatar_px[idx];
-    const size_t pixels = (size_t)LOVE_ICON_PX * LOVE_ICON_PX;
-    for (size_t p = 0; p < pixels; p++) {
-        const uint8_t byte = packed[p / 2];
-        const uint8_t code = (p % 2 == 0) ? (uint8_t)(byte >> 4) : (uint8_t)(byte & 0x0F);
-        const uint32_t rgb = love_pixel_palette[code];
-        dst[p * 4 + 0] = (uint8_t)(rgb & 0xFF);          // B
-        dst[p * 4 + 1] = (uint8_t)((rgb >> 8) & 0xFF);   // G
-        dst[p * 4 + 2] = (uint8_t)((rgb >> 16) & 0xFF);  // R
-        dst[p * 4 + 3] = 0xFF;                           // A
+    for (int y = 0; y < LOVE_ICON_PX; y++) {
+        for (int x = 0; x < LOVE_ICON_PX; x++) {
+            const size_t p = (size_t)y * LOVE_ICON_PX + (size_t)x;
+            const uint8_t byte = packed[p / 2];
+            const uint8_t code = (p % 2 == 0) ? (uint8_t)(byte >> 4) : (uint8_t)(byte & 0x0F);
+            const uint32_t rgb = love_pixel_palette[code];
+            dst[p * 4 + 0] = (uint8_t)(rgb & 0xFF);          // B
+            dst[p * 4 + 1] = (uint8_t)((rgb >> 8) & 0xFF);   // G
+            dst[p * 4 + 2] = (uint8_t)((rgb >> 16) & 0xFF);  // R
+            dst[p * 4 + 3] = avatar_corner_cut(x, y) ? 0x00 : 0xFF;   // A
+        }
     }
+    const size_t pixels = (size_t)LOVE_ICON_PX * LOVE_ICON_PX;
 
     lv_image_dsc_t *dsc = &s_avatar_dsc[idx];
     memset(dsc, 0, sizeof(*dsc));

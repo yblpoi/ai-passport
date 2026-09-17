@@ -53,7 +53,7 @@ class DeepSleepContractTest(unittest.TestCase):
         cls.battery = read("components/bsp/src/bsp_battery.c")
         cls.display = read("components/bsp/src/bsp_display.c")
         cls.i2c = read("components/bsp/src/bsp_i2c.c")
-        cls.demo = read("main/demo_low_power.c")
+        cls.power_sleep = read("main/power_sleep.c")
 
     def test_es8311_force_sleep_sequence_is_complete_and_ordered(self) -> None:
         expected = [
@@ -139,7 +139,7 @@ class DeepSleepContractTest(unittest.TestCase):
                         init.index("spi_bus_initialize"))
 
     def test_terminal_shutdown_order_precedes_deep_sleep(self) -> None:
-        body = function_body(self.demo, "sleep_task")
+        body = function_body(self.power_sleep, "run_deep_sleep")
         calls = [
             "bsp_battery_sleep()",
             "bsp_audio_sleep()",

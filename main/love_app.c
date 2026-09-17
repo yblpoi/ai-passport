@@ -4,20 +4,22 @@
 // 所有 LVGL 访问都在 bsp_lvgl_lock() 内;NVS 落盘、热点开关等慢操作放在锁外。
 #include "love_app.h"
 
-#include "app_shell.h"
 #include "bsp_battery.h"
 #include "bsp_display.h"
 #include "love_ble.h"
 #include "love_date.h"
-#include "love_lunar.h"
 #include "love_httpd.h"
+#include "love_lunar.h"
 #include "love_net.h"
 #include "love_pixel_art.h"
 #include "love_store.h"
 #include "love_time.h"
+#include "power_sleep.h"
 #include "ui_pixel.h"
 
+#include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "lvgl.h"
@@ -48,8 +50,17 @@ static const char *TAG = "love_app";
 
 #define VIEW_MAIN     0
 #define VIEW_SETTINGS (-1)
+#define VIEW_STATUS   (-2)
 
 #define SETTINGS_ROWS 9
+
+// 本机状态页:上面九行信息(含最近一次休眠结果),下面三项操作。
+#define STATUS_INFO_ROWS    9
+#define STATUS_ACTION_COUNT 3
+#define STATUS_ACTION_BACK  2      // 第三项是"返回",不走 action,直接切回设置页
+#define STATUS_ACTION_TOP   226
+#define STATUS_ACTION_PITCH 24
+#define STATUS_LINE_PITCH   16
 
 // 自动熄屏档位(秒)取自 love_store 的共享表,顺序与之严格一致;0 表示不熄屏。
 static const char *const BLANK_OFF_LABELS[LOVE_BLANK_OFF_COUNT] = { "15 秒", "30 秒", "1 分钟", "3 分钟", "常亮" };
@@ -60,7 +71,9 @@ typedef enum {
     ACT_AP_TOGGLE,
     ACT_SYNC,
     ACT_BLANK_OFF,
-    ACT_MENU,
+    ACT_STATUS,
+    ACT_SLEEP_LIGHT,
+    ACT_SLEEP_DEEP,
     ACT_BACK,
 } action_t;
 
@@ -216,9 +229,11 @@ static void add_big_number(lv_obj_t *parent, int32_t value, bool holds, int y)
 
 // 自定义头像在 NVS 里是 40x40 4bpp(每字节两个像素、高半字节在前),索引指向
 // love_pixel_palette。渲染前解成 ARGB8888。
-// arena 按"一屏里最多同时出现 3 个自定义头像"分配(两个人 + 一张事件卡),
+// arena 按"一屏里最多同时出现几个自定义头像"分配。三个视图互斥:主屏是最多的,
+// 只有两个人像;事件卡只有一个图标,本机状态页没有图标。所以 2 个槽位就够,
 // 同槽位在一次渲染内复用同一块缓冲,不重复解码、不动态分配。
-#define AVATAR_DECODE_MAX 3
+// (原先是 3,按"两个人 + 一张事件卡"算的,但这两者从不会同屏。)
+#define AVATAR_DECODE_MAX 2
 static uint8_t s_avatar_px[AVATAR_DECODE_MAX][LOVE_ICON_PX * LOVE_ICON_PX * 4];
 static lv_image_dsc_t s_avatar_dsc[AVATAR_DECODE_MAX];
 static int s_avatar_slot[AVATAR_DECODE_MAX];
@@ -406,7 +421,7 @@ static const action_t SETTING_ACTIONS[SETTINGS_ROWS] = {
     ACT_SYNC,        // 时间
     ACT_BLANK_OFF,   // 自动熄屏
     ACT_NONE,        // 蓝牙对时
-    ACT_MENU,        // Demo 菜单
+    ACT_STATUS,      // 本机状态
     ACT_BACK,        // 返回主屏
 };
 _Static_assert(sizeof(SETTING_ACTIONS) / sizeof(SETTING_ACTIONS[0]) == SETTINGS_ROWS,
@@ -465,8 +480,8 @@ static int build_settings(setting_row_t *rows)
              love_ble_ready() ? "广播中" : "未广播");
     count++;
 
-    rows[count].label = "Demo 菜单";
-    snprintf(rows[count].value, sizeof(rows[count].value), "%s", "进入");
+    rows[count].label = "本机状态";
+    snprintf(rows[count].value, sizeof(rows[count].value), "%s", "查看");
     count++;
 
     rows[count].label = "返回主屏";
@@ -474,6 +489,152 @@ static int build_settings(setting_row_t *rows)
     count++;
 
     return count;
+}
+
+/* ---------- 本机状态页 ---------- */
+
+// 每行自己格式化。取不到的项写 "--",不拿假数据凑数 —— 与主屏"未同步"的处理一致。
+static void status_info_lines(char lines[STATUS_INFO_ROWS][40])
+{
+    size_t i = 0;
+
+    const int soc = bsp_battery_soc();
+    const int mv = bsp_battery_mv();
+    if (soc < 0 || mv < 0) {
+        snprintf(lines[i], 40, "电量  --");
+    } else {
+        snprintf(lines[i], 40, "电量  %d%%  %d.%02dV", soc, mv / 1000, (mv % 1000) / 10);
+    }
+    i++;
+
+    love_net_status_t net;
+    love_net_get_status(&net);
+    if (net.state == LOVE_NET_CONNECTED) {
+        snprintf(lines[i], 40, "网络  已联网 %s", net.ip);
+    } else if (net.state == LOVE_NET_CONNECTING) {
+        snprintf(lines[i], 40, "网络  连接中");
+    } else if (net.ap_active) {
+        // 热点名由 love_net 生成,恒为 ASCII 的 "LoveCount-XXXX";限长既避免
+        // 长名字撑满面板,也让编译器能证明不会截断。
+        snprintf(lines[i], 40, "网络  热点 %.16s", net.ap_ssid);
+    } else {
+        snprintf(lines[i], 40, "网络  %s", net.has_credentials ? "未连接" : "未配置");
+    }
+    i++;
+
+    love_time_state_t time_state;
+    love_time_get(&time_state);
+    if (time_state.holds) {
+        love_date_t today = love_date_from_epoch(time_state.epoch_seconds, LOVE_TZ_OFFSET_SECONDS);
+        int hour = 0, minute = 0;
+        love_hms_from_epoch(time_state.epoch_seconds, LOVE_TZ_OFFSET_SECONDS, &hour, &minute, NULL);
+        snprintf(lines[i], 40, "时间  %02d-%02d %02d:%02d %s",
+                 (int)today.month, (int)today.day, hour, minute,
+                 love_time_src_text(time_state.source));
+    } else {
+        snprintf(lines[i], 40, "时间  未同步");
+    }
+    i++;
+
+    snprintf(lines[i], 40, "蓝牙  %s", love_ble_ready() ? "广播中" : "未广播");
+    i++;
+
+    snprintf(lines[i], 40, "内存  %u 字节", (unsigned)esp_get_free_heap_size());
+    i++;
+
+    const int64_t uptime_s = esp_timer_get_time() / 1000000;
+    if (uptime_s >= 3600) {
+        snprintf(lines[i], 40, "运行  %lld 时 %lld 分",
+                 (long long)(uptime_s / 3600), (long long)((uptime_s % 3600) / 60));
+    } else if (uptime_s >= 60) {
+        snprintf(lines[i], 40, "运行  %lld 分 %lld 秒",
+                 (long long)(uptime_s / 60), (long long)(uptime_s % 60));
+    } else {
+        snprintf(lines[i], 40, "运行  %lld 秒", (long long)uptime_s);
+    }
+    i++;
+
+    power_sleep_result_t sleep;
+    power_sleep_get_result(&sleep);
+    if (!sleep.attempted) {
+        snprintf(lines[i], 40, "休眠  --");
+    } else if (sleep.ok) {
+        snprintf(lines[i], 40, "休眠  浅睡 %d ms", (int)sleep.slept_ms);
+    } else {
+        snprintf(lines[i], 40, "休眠  失败 %s", esp_err_to_name(sleep.error));
+    }
+    i++;
+
+    snprintf(lines[i], 40, "版本  %s", esp_app_get_description()->version);
+    i++;
+
+    uint8_t mac[6] = { 0 };
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+        snprintf(lines[i], 40, "MAC   %02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    } else {
+        snprintf(lines[i], 40, "MAC   --");
+    }
+}
+
+// 本机状态页:七项自身状态 + 最近一次休眠结果,下面两项可执行的休眠操作。
+static void build_status_page(void)
+{
+    lv_obj_t *title = cjk_label(s_scr, "本机状态", COL_WHITE);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 18);
+
+    lv_obj_t *panel = ui_pixel_panel_create(s_scr, 12, 50, 216, 166, UI_PAPER);
+
+    char lines[STATUS_INFO_ROWS][40];
+    status_info_lines(lines);
+    for (int i = 0; i < STATUS_INFO_ROWS; i++) {
+        lv_obj_t *line = ui_pixel_label(panel, lines[i], &s_font_12, UI_INK);
+        lv_obj_align(line, LV_ALIGN_TOP_LEFT, 0, i * STATUS_LINE_PITCH);
+    }
+
+    // 前两项带秒数,第三项"返回"不带。
+    static const char *const NAMES[STATUS_ACTION_COUNT] = { "浅睡眠", "深睡眠", "返回" };
+    const uint32_t SECONDS[STATUS_ACTION_COUNT] = {
+        POWER_SLEEP_LIGHT_SECONDS, POWER_SLEEP_DEEP_SECONDS, 0,
+    };
+    for (int i = 0; i < STATUS_ACTION_COUNT; i++) {
+        const int y = STATUS_ACTION_TOP + i * STATUS_ACTION_PITCH;
+        const bool selected = i == s_sel;
+        if (selected) ui_pixel_block(s_scr, 10, y - 4, 220, 22, COL_WHITE);
+        char text[24];
+        if (SECONDS[i]) snprintf(text, sizeof(text), "%s %u 秒", NAMES[i], (unsigned)SECONDS[i]);
+        else snprintf(text, sizeof(text), "%s", NAMES[i]);
+        lv_obj_t *label = cjk_small(s_scr, text, selected ? COL_INK : COL_WHITE);
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 16, y);
+    }
+}
+
+// 状态页按键:上/下 选操作,确定 执行,长按确定 回设置页。
+static void handle_status_key(bsp_btn_t btn, bsp_btn_ev_t ev, action_t *action)
+{
+    if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+        s_sel = 0;
+        s_view = VIEW_SETTINGS;
+        render();
+        return;
+    }
+    if (ev != BSP_BTN_CLICK) return;
+
+    if (btn == BSP_BTN_UP) {
+        s_sel = (s_sel + STATUS_ACTION_COUNT - 1) % STATUS_ACTION_COUNT;
+        render();
+    } else if (btn == BSP_BTN_DOWN) {
+        s_sel = (s_sel + 1) % STATUS_ACTION_COUNT;
+        render();
+    } else if (btn == BSP_BTN_OK) {
+        if (s_sel == STATUS_ACTION_BACK) {
+            s_sel = 0;
+            s_view = VIEW_SETTINGS;
+            render();
+            return;
+        }
+        *action = (s_sel == 0) ? ACT_SLEEP_LIGHT : ACT_SLEEP_DEEP;
+    }
 }
 
 /* ---------- 渲染 ---------- */
@@ -504,7 +665,8 @@ static void render(void)
     bool holds = time_today(&today);
 
     // 右上角电量;取不到时显示 "--",不阻塞界面。
-    build_battery(s_scr);
+    // 状态页已经单列一行电量,不再重复画一个。
+    if (s_view != VIEW_STATUS) build_battery(s_scr);
 
     if (s_view == VIEW_SETTINGS) {
         setting_row_t rows[SETTINGS_ROWS];
@@ -516,9 +678,9 @@ static void render(void)
         lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 30);
 
         // 12px 字号下一行只要 22px,9 行也放得下,不必分页。
-        // 起始 y 调低过:原来从 32 起,整块贴在顶部,底部空出一大截看着头重脚轻。
+        // 起始 y 与标题(24px,占 30..54)要留出明显间距,不然标题和内容粘在一起。
         for (int i = 0; i < count; i++) {
-            int y = 56 + i * 24;
+            int y = 72 + i * 24;
             bool selected = i == s_sel;
             if (selected) ui_pixel_block(s_scr, 10, y - 4, 220, 22, COL_WHITE);
             lv_obj_t *label = cjk_small(s_scr, rows[i].label,
@@ -532,6 +694,14 @@ static void render(void)
         // 提示行与主屏/事件卡一致用 12px;这里原先误用了 24px 的 cjk_label,
         // 既是其它屏的两倍大,整行也几乎铺满 240px 屏宽。
         hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 执行", COL_WHITE);
+        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
+        lv_screen_load(s_scr);
+        return;
+    }
+
+    if (s_view == VIEW_STATUS) {
+        build_status_page();
+        hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 执行 · 长按返回", COL_WHITE);
         lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
         lv_screen_load(s_scr);
         return;
@@ -708,6 +878,13 @@ static void tick(lv_timer_t *timer)
         render();
         return;
     }
+
+    // 状态页的运行时长、剩余内存、休眠结果本来就是逐秒在变,整页重绘最省事;
+    // 这一屏只有十几个标签,重绘代价远低于主屏(主屏有底纹与图标)。
+    if (s_view == VIEW_STATUS) {
+        render();
+        return;
+    }
     refresh_dynamic();
 }
 
@@ -794,6 +971,8 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 
     if (s_view == VIEW_SETTINGS) {
         handle_settings_key(btn, ev, &action);
+    } else if (s_view == VIEW_STATUS) {
+        handle_status_key(btn, ev, &action);
     } else if (s_edit_field >= 0) {
         // 编辑模式:上键 +1、下键换字段、确定键保存。
         // 农历事件的月日走 love_lunar_step：农历月长不是公历的 28/30/31。
@@ -901,8 +1080,36 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             ESP_LOGW(TAG, "熄屏设置保存失败");
         }
         break;
-    case ACT_MENU:
-        app_shell_enter_menu();
+    case ACT_STATUS:
+        if (bsp_lvgl_lock(300)) {
+            s_sel = 0;
+            s_view = VIEW_STATUS;
+            s_note[0] = '\0';
+            render();
+            bsp_lvgl_unlock();
+        }
+        break;
+    case ACT_SLEEP_LIGHT:
+        // 成功时界面会冻结 POWER_SLEEP_LIGHT_SECONDS 秒;唤醒后 tick 重绘状态页,
+        // 「休眠」那一行会显示实际睡了多久。失败也只写进那一行,不弹提示。
+        (void)power_sleep_light();
+        break;
+    case ACT_SLEEP_DEEP:
+        // 深睡眠前必须交出 Wi-Fi/BLE/HTTP:它们持有射频与 socket,
+        // 不停止就睡会让重启后的外设状态不确定。失败则把服务起回来,
+        // 别把应用留在"网也没了、觉也没睡成"的状态。
+        if (love_app_stop() != ESP_OK) {
+            (void)love_app_start();
+            break;
+        }
+        if (power_sleep_deep() != ESP_OK) {
+            (void)love_app_start();
+            if (bsp_lvgl_lock(300)) {
+                s_note[0] = '\0';
+                render();
+                bsp_lvgl_unlock();
+            }
+        }
         break;
     case ACT_BACK:
         if (bsp_lvgl_lock(300)) {
@@ -950,20 +1157,6 @@ void love_app_enter(void)
     if (state.holds) {
         love_date_t today = love_date_from_epoch(state.epoch_seconds, LOVE_TZ_OFFSET_SECONDS);
         s_last_day = (int)love_days_from_civil(today);
-    }
-}
-
-void love_app_exit(void)
-{
-    if (s_tick) {
-        lv_timer_delete(s_tick);
-        s_tick = NULL;
-    }
-    if (s_scr) {
-        lv_obj_delete(s_scr);
-        s_scr = NULL;
-        s_big = s_unit = s_battery = s_page = NULL;
-        s_battery_fill = NULL;
     }
 }
 

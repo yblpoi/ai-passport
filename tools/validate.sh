@@ -38,7 +38,6 @@ run_static_checks() (
     }
 
     run_host_test test_ui_pixel_math main main/ui_pixel_math.c
-    run_host_test test_demo_navigation main main/demo_navigation.c
     # love_date.c 的农历事件会调 love_lunar,所以两个测试都要带上 love_lunar.c。
     run_host_test test_love_date main main/love_date.c main/love_lunar.c
     # 农历换算依赖 tools/gen_lunar_table.py 生成的表,同样按纯逻辑测。

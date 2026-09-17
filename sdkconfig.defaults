@@ -24,9 +24,10 @@ CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# demo UI 简单,24KB 够用;恋爱倒计时的页面对象更多(底纹+图标+多人卡片),
-# 调到 32KB 留出余量,避免绘制时池耗尽。
-CONFIG_LV_MEM_SIZE_KILOBYTES=32
+# 只画纯色块、标签和 4bpp 图标,对象数量很少,24KB 足够;
+# 历史上为了 demo 菜单的卡片墙 + 吉祥物调到 32KB,那些页面已随 demo 子系统删除。
+# 注意这块是从系统堆里切走的:调大会挤掉 Wi-Fi/BLE/HTTP 的余量。
+CONFIG_LV_MEM_SIZE_KILOBYTES=24
 
 # LVGL 的 examples/ 与 demos/ 默认参与编译,但产品固件不需要它们:
 # 编进去只会拖慢构建,而且 examples 里用到 slider/button 等控件,会与下面的

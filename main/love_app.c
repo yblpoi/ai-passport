@@ -70,11 +70,31 @@ static const char *TAG = "love_app";
 
 #define SETTINGS_ROWS 9
 
-// 列表屏一屏几行。行高 50,首行从 y=42 起,末行底部 42+3*50+48=240,
+// 列表屏一屏几行、首行 y 与行距。行高 50,首行从 y=42 起,末行底部 42+3*50+50=242,
 // 提示行在 y≈302,不会打架。
 #define LIST_PAGE_ROWS 4
 #define LIST_ROW_TOP   42
 #define LIST_ROW_PITCH 50
+
+// 列表行内部的四点坐标。每行**两排**:上排 24px(名字 + 天数数字),下排 12px
+// (分类标签 + 天数单位)。
+//
+// 为什么天数要拆成两段:24px 档下汉字正好 24px 宽、数字 12px 宽(实测字库度量)。
+// 一行里"名字 24px + 365 天前 24px"要 96+96=192px,加上 40px 图标与间距就是 240px
+// 屏宽的极限,名字只剩两三个字 —— 所以把"天前/天后"留在下一行的 12px 里,
+// 数字独占右列(它才是列表上最该被一眼读到的信息)。
+//
+// 右列最坏情况是 5 位数(24px 数字 60px),右对齐到 x=228,即从 x=168 起;
+// 名字从 x=60 起、留 4px 间隔,所以宽度是 104(4 个汉字多一点,超出裁切)。
+#define LIST_ROW_TEXT_X   60
+#define LIST_ROW_LINE1_Y  5      // 名字/数字:24px,占 y+5..y+29
+#define LIST_ROW_LINE2_Y  31     // 分类/单位:12px,占 y+31..y+43
+#define LIST_ROW_ICON_DY  3      // 图标 40px,占 y+3..y+43,与两排文字齐平
+#define LIST_ROW_NAME_W   104
+
+// 分类标签的最大宽度(字节码见 category_width)。下排右侧还有天数单位:
+// 最长的"农历超出范围"在 12px 下是 72px,从 x=156 起,所以标签止于 x=150。
+#define LIST_CATEGORY_MAX_W 90
 
 // 本机状态页:上面九行信息(含最近一次休眠结果),下面三项操作。
 #define STATUS_INFO_ROWS    9
@@ -854,27 +874,34 @@ static void build_page_label(void)
     lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
 }
 
-// 列表右列的天数文案。算不出来(没对时 / 农历超表)写 "--",与事件卡的说法一致,
-// 不拿 0 冒充"就是今天"。
-static void format_row_days(char *out, size_t size, const love_event_t *event,
-                            love_date_t today, bool holds)
+// 列表右列的天数文案,拆成两段输出:数字(24px,右列上行)与单位(12px,右列下行)。
+// 拆分的原因见 LIST_ROW_LINE1_Y 上面那段注释 —— 一行放不下两个 24px 文本。
+// 算不出来(没对时 / 农历超表)时数字写 "--",与事件卡的说法一致,不拿 0 冒充
+// "就是今天"。
+static void format_row_days(char *number, size_t number_size, char *unit, size_t unit_size,
+                            const love_event_t *event, love_date_t today, bool holds)
 {
     if (!holds) {
-        snprintf(out, size, "--");
+        snprintf(number, number_size, "--");
+        unit[0] = '\0';
         return;
     }
+
     const love_countdown_t countdown = love_event_countdown(event, today);
     if (!countdown.resolved) {
-        snprintf(out, size, "--");
-    } else if (countdown.upcoming) {
-        snprintf(out, size, "%d 天", (int)countdown.days);
-    } else {
-        snprintf(out, size, "%d 天前", (int)(-countdown.days));
+        // 农历年份超出数据表:说明白是"算不出来",而不是恰好剩下 0 天。
+        snprintf(number, number_size, "--");
+        snprintf(unit, unit_size, "农历超出范围");
+        return;
     }
+
+    snprintf(number, number_size, "%d",
+             (int)(countdown.days >= 0 ? countdown.days : -countdown.days));
+    snprintf(unit, unit_size, "%s", countdown.upcoming ? "天后" : "天前");
 }
 
 // 分类标签底块的宽度:一个汉字 12px、一个 ASCII 字符 6px,再加左右各 3px 内边距。
-// UTF-8 的续字节不再重复计宽。夹在 [16,100],超长交给 CLIP。
+// UTF-8 的续字节不再重复计宽。夹在 [16,LIST_CATEGORY_MAX_W],超长交给 CLIP。
 static int category_width(const char *text)
 {
     int width = 6;
@@ -883,7 +910,7 @@ static int category_width(const char *text)
         width += (*p >= 0x80) ? 12 : 6;
     }
     if (width < 16) return 16;
-    if (width > 100) return 100;
+    if (width > LIST_CATEGORY_MAX_W) return LIST_CATEGORY_MAX_W;
     return width;
 }
 
@@ -1043,32 +1070,39 @@ static void render(void)
 
                 lv_obj_t *icon = lv_image_create(s_scr);
                 lv_image_set_src(icon, resolve_icon(event->icon));
-                lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 12, row_top + 2);
+                lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 12, row_top + LIST_ROW_ICON_DY);
 
-                const bool has_category = event->category[0] != '\0';
-                if (has_category) {
+                // 分类标签在下排左端(底块先铺,标签压在上面)。
+                if (event->category[0] != '\0') {
                     const int cat_w = category_width(event->category);
-                    ui_pixel_block(s_scr, 60, row_top + 3, cat_w, 15, COL_WHITE);
+                    ui_pixel_block(s_scr, LIST_ROW_TEXT_X, row_top + LIST_ROW_LINE2_Y - 2,
+                                   cat_w, 15, COL_WHITE);
                     lv_obj_t *cat = cjk_small(s_scr, event->category, COL_INK);
                     lv_label_set_long_mode(cat, LV_LABEL_LONG_CLIP);
                     lv_obj_set_width(cat, cat_w - 6);
-                    lv_obj_align(cat, LV_ALIGN_TOP_LEFT, 63, row_top + 5);
+                    lv_obj_align(cat, LV_ALIGN_TOP_LEFT, LIST_ROW_TEXT_X + 3,
+                                 row_top + LIST_ROW_LINE2_Y);
                 }
 
                 lv_obj_t *name = cjk_label(s_scr, event->name, COL_WHITE);
                 lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
-                // 宽度**不能**铺到右列去:24px 的名字会压在右对齐的天数文案上。
-                lv_obj_set_width(name, 120);
-                // 有分类时给分类标签让出一行,没有就整行靠中间一点。
-                lv_obj_align(name, LV_ALIGN_TOP_LEFT, 60,
-                             has_category ? row_top + 19 : row_top + 7);
+                lv_obj_set_width(name, LIST_ROW_NAME_W);
+                lv_obj_align(name, LV_ALIGN_TOP_LEFT, LIST_ROW_TEXT_X,
+                             row_top + LIST_ROW_LINE1_Y);
 
-                // 24 字节:最坏情况是 int 的 11 位数字 + " 天前"(7 字节) + 结尾。
-                // 实际日期被夹在 1970..2099,最多 5 位数。
+                // 天数:数字 24px 在右列上行,单位 12px 在右列下行(见文件头的行内坐标)。
+                // 24 字节:最坏情况是 int 的 11 位数字 + 结尾;实际日期被夹在 1970..2099,
+                // 最多 5 位数。
                 char days[24];
-                format_row_days(days, sizeof(days), event, today, holds);
-                lv_obj_t *day = cjk_small(s_scr, days, COL_WHITE);
-                lv_obj_align(day, LV_ALIGN_TOP_RIGHT, -12, row_top + 23);
+                // 24 字节:最长的单位是"农历超出范围"(6 个汉字 = 18 字节 + 结尾)。
+                char unit[24];
+                format_row_days(days, sizeof(days), unit, sizeof(unit), event, today, holds);
+                lv_obj_t *day = cjk_label(s_scr, days, COL_WHITE);
+                lv_obj_align(day, LV_ALIGN_TOP_RIGHT, -12, row_top + LIST_ROW_LINE1_Y);
+                if (unit[0]) {
+                    lv_obj_t *unit_obj = cjk_small(s_scr, unit, COL_WHITE);
+                    lv_obj_align(unit_obj, LV_ALIGN_TOP_RIGHT, -12, row_top + LIST_ROW_LINE2_Y);
+                }
             }
 
             hint_obj = cjk_small(s_scr, "上/下 翻页 · 长按确定 设置", COL_WHITE);

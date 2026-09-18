@@ -80,6 +80,9 @@ run_static_checks() (
     "${test_dir}/test_bsp_audio_recovery"
 
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_deep_sleep_contract.py
+    # 图标素材生成器：调色板 PNG 解码、降采样的取舍，以及"自定义头像那张 16 色表
+    # 一字不许改"这条不变量（改了会让所有已上传头像换色）。
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_love_pixel_art_gen.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py

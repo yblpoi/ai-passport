@@ -45,7 +45,7 @@ BG_TILE_PX = 48
 # 更好的第三选项。这里选保持原样。
 #
 # 圆角只作用于**自定义头像**(照片,满幅方角),由 main/ui_pixel_math.c 的
-# ui_pixel_corner_cut() 在解码成 ARGB8888 时把角落 alpha 置 0;网页端 admin.css
+# ui_pixel_corner_cut() 在 ui_pixel_pack_avatar_i4() 里把角落改指到透明索引;网页端 admin.css
 # 用同一个半径,并且只给自定义头像的 img 加圆角(给图形图标加会同样切到描边)。
 # 圆形底座仍然不做:实测圆形会让 16 个角色里 15 个掉实心像素(猫咪少 186、礼物少 284)。
 

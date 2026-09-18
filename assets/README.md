@@ -188,9 +188,9 @@ Store reusable source images and generated display assets in `images/`.
   choice is only "leave it alone" or "nick it", so it is left alone.
   Both sides agree: `assets/web/admin.css` rounds only custom-avatar images
   (`img.rounded`; rounding the icons there would nick the same outlines), and the
-  device masks custom-avatar corners to alpha 0 while decoding to ARGB8888 (the
-  avatar palette has no transparent entry) through the same
-  `ui_pixel_corner_cut()`.
+  device points custom-avatar corners at a transparent palette index while packing
+  the image as I4, using the same `ui_pixel_corner_cut()` mask (the avatar palette
+  has no transparent entry of its own, so one unused index is given alpha 0).
 - Conversion steps: run `python3 assets/images/love_pixel_art_gen.py` from the
   repository root. Re-running after a mask change updates device and web assets
   together.

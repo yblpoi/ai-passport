@@ -316,13 +316,16 @@ static void add_big_number(lv_obj_t *parent, int32_t value, bool holds, int y)
 /* ---------- 图标解析:内置素材 / 自定义头像 ---------- */
 
 // 自定义头像在 NVS 里是 40x40 4bpp(每字节两个像素、高半字节在前),索引指向
-// love_pixel_palette。渲染前解成 ARGB8888。
-// arena 按"一屏里最多同时出现几个自定义头像"分配。三个视图互斥:主屏是最多的,
-// 只有两个人像;事件卡只有一个图标,本机状态页没有图标。所以 2 个槽位就够,
-// 同槽位在一次渲染内复用同一块缓冲,不重复解码、不动态分配。
-// (原先是 3,按"两个人 + 一张事件卡"算的,但这两者从不会同屏。)
-#define AVATAR_DECODE_MAX 2
-static uint8_t s_avatar_px[AVATAR_DECODE_MAX][LOVE_ICON_PX * LOVE_ICON_PX * 4];
+// love_pixel_palette。渲染前**打包成 LVGL 的 I4 图**(调色板 16 项 + 索引数据,与内置图标
+// 同一套约定),而不是解成 ARGB8888:两者画出来一样,但一张 ARGB 要 6400 字节、一张 I4
+// 只要 864 字节 —— 一屏四张就是 25.6KB 对 3.5KB,而这片 RAM 是要留给 Wi-Fi 发帧的。
+//
+// 槽位数 = 一屏最多同时出现几个自定义头像:**列表屏一屏 4 行**,4 行各用一张不同的自定义
+// 头像就是 4 张(主屏 2 个、单页卡 1 个都不超过它)。原先只留 2 个槽位,第 3 行起会静默
+// 退回内置图标 0,看着像"图标张冠李戴"。同槽位在一次渲染内复用,不重复打包、不动态分配。
+#define AVATAR_DECODE_MAX LIST_PAGE_ROWS
+#define AVATAR_SLOT_BYTES (UI_PIXEL_I4_PALETTE_BYTES + LOVE_ICON_PX * LOVE_ICON_PX / 2)
+static uint8_t s_avatar_data[AVATAR_DECODE_MAX][AVATAR_SLOT_BYTES];
 static lv_image_dsc_t s_avatar_dsc[AVATAR_DECODE_MAX];
 static int s_avatar_slot[AVATAR_DECODE_MAX];
 static int s_avatar_used;
@@ -353,33 +356,26 @@ static const lv_image_dsc_t *resolve_icon(uint8_t icon)
         return love_pixel_icon(0);   // 该槽位还没上传过,退回内置图标而不是留空
     }
 
-    const int idx = s_avatar_used++;
-    uint8_t *dst = s_avatar_px[idx];
-    for (int y = 0; y < LOVE_ICON_PX; y++) {
-        for (int x = 0; x < LOVE_ICON_PX; x++) {
-            const size_t p = (size_t)y * LOVE_ICON_PX + (size_t)x;
-            const uint8_t byte = packed[p / 2];
-            const uint8_t code = (p % 2 == 0) ? (uint8_t)(byte >> 4) : (uint8_t)(byte & 0x0F);
-            const uint32_t rgb = love_pixel_palette[code];
-            dst[p * 4 + 0] = (uint8_t)(rgb & 0xFF);          // B
-            dst[p * 4 + 1] = (uint8_t)((rgb >> 8) & 0xFF);   // G
-            dst[p * 4 + 2] = (uint8_t)((rgb >> 16) & 0xFF);  // R
-            dst[p * 4 + 3] = ui_pixel_corner_cut(x, y, LOVE_ICON_PX, LOVE_ICON_PX,
-                                                 AVATAR_CORNER_RADIUS) ? 0x00 : 0xFF;   // A
-        }
+    const int idx = s_avatar_used;
+    uint8_t *const data = s_avatar_data[idx];
+    // 打包顺带把四角镂空(做法见 ui_pixel_pack_avatar_i4 的说明)。
+    if (ui_pixel_pack_avatar_i4(data, sizeof(s_avatar_data[idx]), packed,
+                                love_pixel_palette, LOVE_ICON_PX, LOVE_ICON_PX,
+                                AVATAR_CORNER_RADIUS) < 0) {
+        return love_pixel_icon(0);
     }
-    const size_t pixels = (size_t)LOVE_ICON_PX * LOVE_ICON_PX;
 
     lv_image_dsc_t *dsc = &s_avatar_dsc[idx];
     memset(dsc, 0, sizeof(*dsc));
     dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
-    dsc->header.cf = LV_COLOR_FORMAT_ARGB8888;
+    dsc->header.cf = LV_COLOR_FORMAT_I4;
     dsc->header.w = LOVE_ICON_PX;
     dsc->header.h = LOVE_ICON_PX;
-    dsc->header.stride = LOVE_ICON_PX * 4;
-    dsc->data_size = (uint32_t)(pixels * 4);
-    dsc->data = dst;
+    dsc->header.stride = LOVE_ICON_PX / 2;
+    dsc->data_size = (uint32_t)sizeof(s_avatar_data[idx]);
+    dsc->data = data;
     s_avatar_slot[idx] = slot;
+    s_avatar_used++;
     return dsc;
 }
 

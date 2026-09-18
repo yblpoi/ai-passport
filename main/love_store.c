@@ -67,7 +67,7 @@ void love_config_defaults(love_config_t *cfg)
     love_utf8_copy(cfg->people[1].name, sizeof(cfg->people[1].name), "嘎嘎");
     cfg->people[1].icon = LOVE_ICON_CAT;
 
-    // 默认给三个固定的公历节日 + 生日,再补三个农历节日(春节/中秋/端午),
+    // 默认给四个固定的公历节日 + 生日,再补三个农历节日(春节/中秋/七夕),
     // 让"农历"这个能力一开机就能看见,不用用户自己去配。
     const struct {
         const char *name;
@@ -76,14 +76,14 @@ void love_config_defaults(love_config_t *cfg)
         int month;
         int day;
     } DEFAULTS[] = {
-        { "元旦",      LOVE_ICON_BALLOON, LOVE_EVENT_YEARLY, 1,  1 },
-        { "情人节",    LOVE_ICON_HEART,   LOVE_EVENT_YEARLY, 2,  14 },
-        { "咕咕嘎嘎",  LOVE_ICON_CAKE,    LOVE_EVENT_YEARLY, 7,  15 },
-        { "国庆节",    LOVE_ICON_STAR,    LOVE_EVENT_YEARLY, 10, 1 },
-        { "圣诞节",    LOVE_ICON_TREE,    LOVE_EVENT_YEARLY, 12, 25 },
-        { "春节",      LOVE_ICON_GIFT,    LOVE_EVENT_LUNAR,  1,  1 },
-        { "中秋",      LOVE_ICON_MOON,    LOVE_EVENT_LUNAR,  8,  15 },
-        { "端午",      LOVE_ICON_LOVING,  LOVE_EVENT_LUNAR,  5,  5 },
+        { "元旦",      LOVE_ICON_GIFT,        LOVE_EVENT_YEARLY, 1,  1 },
+        { "情人节",    LOVE_ICON_HEART,       LOVE_EVENT_YEARLY, 2,  14 },
+        { "咕咕嘎嘎",  LOVE_ICON_CAKE,        LOVE_EVENT_YEARLY, 7,  15 },
+        { "国庆节",    LOVE_ICON_STAR,        LOVE_EVENT_YEARLY, 10, 1 },
+        { "圣诞节",    LOVE_ICON_TREE,        LOVE_EVENT_YEARLY, 12, 25 },
+        { "春节",      LOVE_ICON_FIRECRACKER, LOVE_EVENT_LUNAR,  1,  1 },
+        { "中秋",      LOVE_ICON_RABBIT,      LOVE_EVENT_LUNAR,  8,  15 },
+        { "七夕",      LOVE_ICON_BOUQUET,     LOVE_EVENT_LUNAR,  7,  7 },
     };
     const size_t count = sizeof(DEFAULTS) / sizeof(DEFAULTS[0]);
     for (size_t i = 0; i < count && i < LOVE_EVENT_MAX; i++) {

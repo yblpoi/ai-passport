@@ -148,15 +148,18 @@ ICONS: list[tuple[str, str, list[str]]] = [
         "..KRRK..",
         "...KK...",
     ]),
+    # 星星是唯一不画深色描边的图标:8x8 里五个尖必须顶到画布边缘才够饱满
+    # (参考 ⭐️ 的形状,它本身也没有描边)。试过收窄一像素去套描边,会变成
+    # "胖十字加两条腿";也试过外沿换橙色当暗部,看起来像脏掉的渐变。
     ("star", "星星", [
-        "...KK...",
-        "..KYYK..",
-        "KKYYYYKK",
-        "KYYYYYYK",
-        ".KYYYYK.",
-        "..KYYK..",
-        "KYYKKYYK",
-        "KYY..YYK",
+        "...YY...",
+        "...YY...",
+        "..YYYY..",
+        "YYYYYYYY",
+        ".YYYYYY.",
+        "..YYYY..",
+        ".YY..YY.",
+        "YY....YY",
     ]),
     ("flower", "小花", [
         ".KK..KK.",

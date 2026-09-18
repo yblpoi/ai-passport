@@ -160,8 +160,13 @@ Store reusable source images and generated display assets in `images/`.
   own "pixels" do not land on a real grid and its outlines are hairlines, so its
   output cannot be downsampled into this format. It went in two passes: the four that
   did not read at all first (bird, dog, rabbit, tree), then the other twelve once the
-  style was settled. The **star is a five-pointed star** (a top point, two arms, two
-  legs and a narrow waist); an earlier attempt drew a four-point sparkle instead.
+  style was settled. The **star is a plump five-pointed star**, shaped after the star emoji: a top
+  point, two arms and two legs. Earlier attempts drew a four-point sparkle and a
+  "thin" star with a narrow waist; both were rejected. It is the one icon here
+  **without** the dark outline: an 8x8 star needs its five points to reach the
+  canvas edge to stay plump, and insetting it by a pixel to fit an outline
+  degrades it into "a fat plus with two legs". Giving the rim the orange palette
+  entry instead was tried too and read as a smeared gradient.
 - The icon **order must not change**: `LOVE_ICON_*` indices are stored in the user's
   configuration, so reordering would silently change their icons.
 - Generated output:

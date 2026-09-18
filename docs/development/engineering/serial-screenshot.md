@@ -43,11 +43,12 @@ with Bluetooth on, so a static 150 KB buffer would simply not boot.
 
 Instead `main/love_shot.c` hooks `LV_EVENT_FLUSH_START` — the same event
 `bsp_display_lvgl.c` already uses for its corner mask — and streams each flush
-chunk straight out as it arrives. The panel's LVGL draw buffer is 240x20, so a
-full-screen refresh arrives as 16 full-width bands that concatenate into exactly
-the image the protocol promises. That assumption is checked per chunk: if a chunk
-is not full width or does not start where the previous one ended, the transfer is
-abandoned rather than sending a torn image.
+chunk straight out as it arrives. The panel's LVGL draw buffer is one full-width
+band (240 px wide, `buffer_size` rows tall), so a full-screen refresh arrives as
+a column of full-width bands that concatenate into exactly the image the protocol
+promises. That assumption is checked per chunk: if a chunk is not full width or
+does not start where the previous one ended, the transfer is abandoned rather
+than sending a torn image.
 
 ## Things that will bite you
 

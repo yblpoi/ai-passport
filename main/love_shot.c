@@ -61,9 +61,9 @@ static void capture_flush(lv_event_t *event)
 
     const int32_t w = lv_area_get_width(area);
     const int32_t h = lv_area_get_height(area);
-    // 只有"整宽 + 自顶向下首尾相接"的一串分块拼起来才是整幅图。本板绘制缓冲是
-    // 240×20,整屏重绘正好 16 条这样的带;一旦不是这个形状,立即中止 ——
-    // 发一张错位的图比不发更糟。
+    // 只有"整宽 + 自顶向下首尾相接"的一串分块拼起来才是整幅图。本板绘制缓冲的
+    // 高度就是分块高度(见 bsp_display_lvgl.c 的 buffer_size),整屏重绘正好切成
+    // 一列这样的带;一旦不是这个形状,立即中止 —— 发一张错位的图比不发更糟。
     if (w != BSP_LCD_W || area->x1 != 0 || area->y1 != s_next_y) {
         s_capturing = false;
         return;

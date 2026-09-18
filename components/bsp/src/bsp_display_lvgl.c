@@ -79,9 +79,11 @@ lv_display_t *bsp_lvgl_init(void) {
         .panel_handle = bsp_display_panel(),
         .io_handle    = bsp_display_io(),
         // ⚠ C3 无 PSRAM,DMA 只能用内部 RAM(总共约 150KB)。
-        // 20 行单缓冲 ≈ 9.6KB;若改成 40 行双缓冲(≈37.5KB)会把 I2S 等外设的
-        // DMA 描述符挤到 NO_MEM。刷新略慢但稳。
-        .buffer_size   = (uint32_t)BSP_LCD_W * 20,
+        // 40 行单缓冲 ≈ 19.2KB。整屏 320 行因此切成 8 带(20 行时是 16 带):每带的
+        // 渲染与发送都翻倍,一屏总时间不变,少掉的是肉眼看到的那种"逐行擦除"阶梯。
+        // 双缓冲(≈37.5KB)不行 —— 它会把 I2S 等外设的 DMA 描述符挤到 NO_MEM,
+        // 所以 double_buffer 仍是 false。
+        .buffer_size   = (uint32_t)BSP_LCD_W * 40,
         .double_buffer = false,
         .hres = BSP_LCD_W, .vres = BSP_LCD_H,
         // 旋转/镜像必须在这里配:esp_lvgl_port 注册显示时会重新下发 MADCTL,

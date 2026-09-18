@@ -14,12 +14,12 @@
 #define LOVE_ICON_HEART 6  // 爱心
 #define LOVE_ICON_STAR 7  // 星星
 #define LOVE_ICON_FLOWER 8  // 小花
-#define LOVE_ICON_MOON 9  // 月亮
+#define LOVE_ICON_MOON 9  // 月饼
 #define LOVE_ICON_CAKE 10  // 蛋糕
 #define LOVE_ICON_GIFT 11  // 礼物
 #define LOVE_ICON_BALLOON 12  // 气球
 #define LOVE_ICON_RING 13  // 戒指
-#define LOVE_ICON_LEAF 14  // 叶子
+#define LOVE_ICON_LEAF 14  // 爱你
 #define LOVE_ICON_TREE 15  // 圣诞树
 
 #define LOVE_ICON_COUNT 16

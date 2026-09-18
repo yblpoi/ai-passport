@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """纪念日摆件像素素材生成器（无第三方依赖）。
 
-同一份 8x8 像素掩码同时产出两路结果，保证设备界面与后台网页的视觉完全一致：
+同一份素材同时产出两路结果，保证设备界面与后台网页的视觉完全一致：
 
 1. `assets/images/love_pixel_art.c` + `main/love_pixel_art.h`
-   —— 40x40 的 4bpp 索引图标（掩码放大 5 倍，整数倍放缩才不会有半像素；调色板
-   16 色内嵌在数据头部）与 48x48 爱心底纹。
+   —— 40x40 的 4bpp 索引图标（每张自带 16 色调色板，索引 0 恒为透明）与
+   48x48 爱心底纹。
 2. `assets/images/web/icon_<name>.png` + `assets/images/web/icons.json`
    —— 网页用的同款 PNG 与 base64 数据表。
-3. `assets/images/web/contact-sheet.png` —— 仅供人工核对的预览图。
+3. `assets/images/web/contact-sheet.png` + `contact-sheet-zoom.png`
+   —— 仅供人工核对的预览图（后者 3 倍放大、棋盘底色，看细节用）。
 
-图标素材正在从「手绘 8x8 掩码」切换到 `assets/images/emoji/` 下 16 张 Twemoji
-（CC-BY 4.0，由 `assets/images/fetch_emoji.py` 抓取并登记 sha256）。本文件已经带上
-这条新路径的全部纯函数（调色板 PNG 解码、裁边与等比降采样、每图独立调色板、I4
-打包）与主机测试，但**还没有接线**——下面这版 main() 生成的产物与切换前逐字节相同。
-掩码字符：`.` 透明；其余见 PALETTE。每行必须恰好 8 个字符。
+图标的素材是 `assets/images/emoji/` 下 16 张 Twemoji（CC-BY 4.0，来源与 sha256
+见那里的 manifest.json，许可原文见 LICENSE-GRAPHICS.txt）：裁掉透明边、按长边
+等比降到 20x20 逻辑像素（每格取 alpha 加权的主导色，得到硬边像素风），再整数倍
+放大到 40x40。爱心底纹仍是本仓库手绘的 8x8 掩码。
+
+用法（仓库根目录）：
+    python3 assets/images/love_pixel_art_gen.py
+
+底纹掩码字符：`.` 透明；其余见 PALETTE。每行必须恰好 8 个字符。
 """
 
 from __future__ import annotations
@@ -30,18 +35,17 @@ DEVICE_C = ROOT / "assets/images/love_pixel_art.c"
 DEVICE_H = ROOT / "main/love_pixel_art.h"
 WEB_DIR = ROOT / "assets/images/web"
 
-MASK_PX = 8      # 掩码边长
-ICON_SCALE = 5   # 8 -> 40，整数倍放大才不会有半像素
-ICON_PX = MASK_PX * ICON_SCALE
-BG_TILE_PX = 48
-
-# —— Twemoji 图标路径的参数（接线前只被下面的纯函数与主机测试用到）——
+MASK_PX = 8      # 底纹掩码的边长（图标用的是下面的 Twemoji 素材）
 EMOJI_SRC_DIR = ROOT / "assets/images/emoji"
 EMOJI_PX = 20     # 降采样后的逻辑像素边长：40px 的屏上每格恰好 2x2
-EMOJI_SCALE = 2   # 20 -> 40
+EMOJI_SCALE = 2   # 20 -> 40，整数倍放大才不会有半像素
+ICON_PX = EMOJI_PX * EMOJI_SCALE
+BG_TILE_PX = 48
 ALPHA_MIN = 128           # 源像素参与裁边与投票的 alpha 门槛
 COVER_NUM, COVER_DEN = 1, 2   # 一格算"不透明"的门槛：累计 alpha >= 半格
 MAX_OPAQUE_COLORS = 15    # I4 的 16 个槽位里给透明留一格
+ZOOM_SHEET_SCALE = 3      # 放大联络表：每图放大 3 倍（最近邻）
+ZOOM_SHEET_COLUMNS = 8    # 一行放 8 个，16 张正好两行
 
 # 为什么内置图标**不做**圆角(以及为什么"缩小一点"解决不了问题):
 #
@@ -85,173 +89,6 @@ PALETTE_ORDER = ["K", "W", "w", "R", "r", "L", "D", "S", "O", "Y", "G", "g", "B"
 assert len(PALETTE_ORDER) == 16, "4bpp 自定义头像需要恰好 16 个索引色"
 assert set(PALETTE_ORDER) == set(PALETTE), "PALETTE_ORDER 与 PALETTE 必须一一对应"
 
-# 顺序必须与 love_pixel_art.h 中生成的 LOVE_ICON_* 常量一致。
-ICONS: list[tuple[str, str, list[str]]] = [
-    ("bird", "小鸟", [
-        "........",
-        "..KKKK..",
-        ".KYYYYK.",
-        "KYKYYKYK",
-        "KYYOOYYK",
-        "KYYYYYYK",
-        ".KYYYYK.",
-        "..O..O..",
-    ]),
-    ("cat", "猫咪", [
-        ".KK..KK.",
-        ".KrKKrK.",
-        "KeeeeeeK",
-        "KeKeeKeK",
-        "KeeWWeeK",
-        ".KerreK.",
-        "..KKKK..",
-        "........",
-    ]),
-    ("dog", "狗狗", [
-        "KDD..DDK",
-        "KKDDDDKK",
-        "KDDDDDDK",
-        "KDKDDKDK",
-        "KDDDDDDK",
-        "KDSSSSDK",
-        ".KDSSDK.",
-        "..KKKK..",
-    ]),
-    ("rabbit", "兔子", [
-        ".KK..KK.",
-        ".KrKKrK.",
-        ".KWKKWK.",
-        "KWWWWWWK",
-        "KWKWWKWK",
-        "KWWrrWWK",
-        ".KWWWWK.",
-        "..KKKK..",
-    ]),
-    ("bear", "小熊", [
-        ".KK..KK.",
-        "KDDKKDDK",
-        "KDDDDDDK",
-        "KDKDDKDK",
-        "KDDDDDDK",
-        "KDSSSSDK",
-        "KDSKKSK.",
-        ".KKDDKK.",
-    ]),
-    ("fox", "狐狸", [
-        "KK....KK",
-        "KOK..KOK",
-        "KOOKKOOK",
-        "KOKOOKOK",
-        "KOWWWWOK",
-        "KOWWWWOK",
-        ".KOKKOK.",
-        "..KKKK..",
-    ]),
-    ("heart", "爱心", [
-        ".KK..KK.",
-        "KWWKKRRK",
-        "KWRRRRRK",
-        "KRRRRRRK",
-        "KRRRRRRK",
-        ".KRRRRK.",
-        "..KRRK..",
-        "...KK...",
-    ]),
-    # 星星是唯一不画深色描边的图标:8x8 里五个尖必须顶到画布边缘才够饱满
-    # (参考 ⭐️ 的形状,它本身也没有描边)。试过收窄一像素去套描边,会变成
-    # "胖十字加两条腿";也试过外沿换橙色当暗部,看起来像脏掉的渐变。
-    ("star", "星星", [
-        "...YY...",
-        "...YY...",
-        "..YYYY..",
-        "YYYYYYYY",
-        ".YYYYYY.",
-        "..YYYY..",
-        ".YY..YY.",
-        "YY....YY",
-    ]),
-    ("flower", "小花", [
-        ".KK..KK.",
-        "KrrKKrrK",
-        "KrrrrrrK",
-        "KKrYYrKK",
-        "KKrYYrKK",
-        "KrrrrrrK",
-        "KrrKKrrK",
-        ".KK..KK.",
-    ]),
-    ("moon", "月亮", [
-        "...KKK..",
-        "..KYYYK.",
-        ".KYYYK..",
-        ".KYYK...",
-        ".KYYK...",
-        ".KYYYK..",
-        "..KYYYK.",
-        "...KKK..",
-    ]),
-    ("cake", "蛋糕", [
-        "...O....",
-        "...W....",
-        "KKKKKKKK",
-        "KWWWWWWK",
-        "KWKWWKWK",
-        "KSSSSSSK",
-        "KSSSSSSK",
-        "KKKKKKKK",
-    ]),
-    ("gift", "礼物", [
-        ".K....K.",
-        "KYYKKYYK",
-        "KYYKKYYK",
-        "KRRYYRRK",
-        "KRRYYRRK",
-        "KRRYYRRK",
-        "KRRYYRRK",
-        "KKKKKKKK",
-    ]),
-    ("balloon", "气球", [
-        "..KKKK..",
-        ".KWRRRK.",
-        "KWRRRRRK",
-        "KRRRRRRK",
-        "KRRRRRRK",
-        ".KRRRRK.",
-        "..KKKK..",
-        "...K....",
-    ]),
-    ("ring", "戒指", [
-        "...KK...",
-        "..KBBK..",
-        ".KbBBbK.",
-        "KKYYYYKK",
-        "KYYKKYYK",
-        "KYK..KYK",
-        "KYK..KYK",
-        ".KKKKKK.",
-    ]),
-    ("leaf", "叶子", [
-        ".....KK.",
-        "...KGGK.",
-        "..KGGGK.",
-        ".KGgGGK.",
-        "KGGgGGK.",
-        "KGGgGK..",
-        ".KGGK...",
-        "KK......",
-    ]),
-    ("tree", "圣诞树", [
-        "...KK...",
-        "..KYYK..",
-        "...GG...",
-        "..KGGK..",
-        ".KGGGGK.",
-        "KGGGGGGK",
-        ".KGGGGK.",
-        "..KDDK..",
-    ]),
-]
-
 # 图标素材（Twemoji，见文件头）。顺序即 love_pixel_art.h 里生成的 LOVE_ICON_* 下标，
 # 也是用户配置里存的图标号，绝不能改（改序 = 把用户选好的图标换掉）。
 # 文件名是 Twemoji 的码位命名，来源与 sha256 见 assets/images/emoji/manifest.json。
@@ -265,12 +102,12 @@ EMOJI: list[tuple[str, str, str]] = [
     ("heart", "爱心", "2764"),
     ("star", "星星", "2b50"),
     ("flower", "小花", "1f338"),
-    ("moon", "月亮", "1f319"),
+    ("moon", "月饼", "1f96e"),
     ("cake", "蛋糕", "1f382"),
     ("gift", "礼物", "1f381"),
     ("balloon", "气球", "1f388"),
     ("ring", "戒指", "1f48d"),
-    ("leaf", "叶子", "1f343"),
+    ("leaf", "爱你", "1f970"),
     ("tree", "圣诞树", "1f384"),
 ]
 
@@ -566,6 +403,51 @@ def pack_icon_i4(grid, palette) -> bytes:
     return bytes(out)
 
 
+def grid_to_rows(grid, palette) -> list[list[tuple[int, int, int, int]]]:
+    """把逻辑像素网格放大成 40x40 的 RGBA 行。
+
+    网页 PNG 与放大联络表都用它，和设备那份 I4 数据出自同一个网格——两端不会画出
+    不一样的东西。
+    """
+    index = {px: i for i, px in enumerate(palette)}
+    rows: list[list[tuple[int, int, int, int]]] = []
+    for row in grid:
+        scaled: list[tuple[int, int, int, int]] = []
+        for cell in row:
+            px = palette[0 if cell is None else index[(cell[0], cell[1], cell[2], 255)]]
+            scaled.extend([px] * EMOJI_SCALE)
+        rows.extend([scaled] * EMOJI_SCALE)
+    return rows
+
+
+def build_zoom_sheet(arrays) -> list[list[tuple[int, int, int, int]]]:
+    """人工验收用的放大联络表：每图放大 ZOOM_SHEET_SCALE 倍（最近邻）、棋盘格底色。
+
+    40px 一行连排的 contact-sheet 看不出细节，透明边落在粉色底上尤其糊；棋盘底
+    能一眼分辨"哪一格是透明、边界在哪"。
+    """
+    cell = ICON_PX * ZOOM_SHEET_SCALE
+    sheet_rows = -(-len(arrays) // ZOOM_SHEET_COLUMNS)
+    width = cell * ZOOM_SHEET_COLUMNS
+    height = cell * sheet_rows
+    tile = 8
+    light, dark = (0xF2, 0xF2, 0xF2, 255), (0xD8, 0xD8, 0xD8, 255)
+    sheet = [[light if (x // tile + y // tile) % 2 == 0 else dark for x in range(width)]
+             for y in range(height)]
+    for index, (_name, rows) in enumerate(arrays):
+        ox = (index % ZOOM_SHEET_COLUMNS) * cell
+        oy = (index // ZOOM_SHEET_COLUMNS) * cell
+        for y, row in enumerate(rows):
+            for x, px in enumerate(row):
+                if px[3] == 0:
+                    continue
+                for dy in range(ZOOM_SHEET_SCALE):
+                    line = sheet[oy + y * ZOOM_SHEET_SCALE + dy]
+                    for dx in range(ZOOM_SHEET_SCALE):
+                        line[ox + x * ZOOM_SHEET_SCALE + dx] = px
+    return sheet
+
+
 def build_bg_tile() -> list[list[tuple[int, int, int]]]:
     """48x48 无缝平铺:两颗错位爱心，对应截图里的爱心壁纸。"""
     base = BG_BASE
@@ -583,35 +465,6 @@ def build_bg_tile() -> list[list[tuple[int, int, int]]]:
     return tile
 
 
-def build_icon_palette(arrays) -> list[tuple[int, int, int, int]]:
-    """图标的 I4 调色板：索引 0 固定为透明（图标外轮廓内部是镂空的），
-    其余按 PALETTE_ORDER 顺序排列图标真正用到的颜色。
-
-    注意与 love_pixel_palette 的区别：那张 16 色表是自定义头像的索引顺序，
-    没有透明项（网页上传的头像恒为不透明）。图标要透明，所以自带一张表——
-    lv_bin_decoder 对 LV_IMAGE_SRC_VARIABLE + 索引格式的约定就是
-    palette 位于 image->data 开头，因此每张图都能带自己的 16 色。"""
-    used = set()
-    for _name, rows in arrays:
-        for row in rows:
-            used.update(row)
-
-    transparent = (0, 0, 0, 0)
-    palette = [transparent]
-    for ch in PALETTE_ORDER:
-        r, g, b = PALETTE[ch]
-        if (r, g, b, 255) in used:
-            palette.append((r, g, b, 255))
-
-    opaque_used = used - {transparent}
-    assert len(opaque_used) + 1 <= 16, (
-        f"I4 只有 16 个槽位：图标用了 {len(opaque_used)} 种不透明色 + 透明，放不下")
-    assert len(palette) - 1 == len(opaque_used), (
-        "有图标颜色没登记在 PALETTE/PALETTE_ORDER 里，会在生成时被悄悄丢掉")
-
-    return palette + [(0, 0, 0, 0)] * (16 - len(palette))
-
-
 def generate(root: Path = ROOT) -> int:
     """生成全部素材，返回图标张数。
 
@@ -626,9 +479,15 @@ def generate(root: Path = ROOT) -> int:
 
     icons: list[tuple[str, str]] = []
     arrays: list[tuple[str, list[list[tuple[int, int, int, int]]]]] = []
+    grids: list[list[list[tuple[int, int, int] | None]]] = []
+    palettes: list[list[tuple[int, int, int, int]]] = []
 
-    for name, label, mask in ICONS:
-        arrays.append((name, scale(parse_mask(mask), ICON_SCALE)))
+    for name, label, code in EMOJI:
+        grid = load_emoji_grid(EMOJI_SRC_DIR / f"{code}.png")
+        palette = per_icon_palette(grid)
+        grids.append(grid)
+        palettes.append(palette)
+        arrays.append((name, grid_to_rows(grid, palette)))
         icons.append((name, label))
 
     c_lines = [
@@ -643,19 +502,17 @@ def generate(root: Path = ROOT) -> int:
         "",
     ]
 
-    icon_palette = build_icon_palette(arrays)
-    palette_index = {px: i for i, px in enumerate(icon_palette)}
     row_bytes = ICON_PX // 2
 
-    for name, rows in arrays:
-        packed = bytearray()
-        for row in rows:
-            for x in range(0, ICON_PX, 2):
-                packed.append((palette_index[row[x]] << 4) | palette_index[row[x + 1]])
+    for (name, _rows), grid, palette in zip(arrays, grids, palettes):
+        # 打包走主机测试覆盖的纯函数：数据开头 16*4 字节是这张图自己的调色板。
+        data = pack_icon_i4(grid, palette)
+        packed = data[16 * 4:]
 
         c_lines.append(
             f"static const uint8_t icon_{name}_data[{16 * 4 + ICON_PX * row_bytes}] = {{")
-        for i, (r, g, b, a) in enumerate(icon_palette):
+        for i in range(16):
+            b, g, r, a = data[i * 4:i * 4 + 4]
             c_lines.append(f"    /* pal{i:2d} */ 0x{b:02X}, 0x{g:02X}, 0x{r:02X}, 0x{a:02X},")
         for off in range(0, len(packed), row_bytes):
             c_lines.append("    " + ", ".join(
@@ -783,6 +640,7 @@ def generate(root: Path = ROOT) -> int:
                     continue
                 sheet[r][c + idx * ICON_PX] = (px[0], px[1], px[2], 255)
     write_png(web_dir / "contact-sheet.png", sheet)
+    write_png(web_dir / "contact-sheet-zoom.png", build_zoom_sheet(arrays))
 
     return len(arrays)
 

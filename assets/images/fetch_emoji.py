@@ -43,12 +43,12 @@ EMOJI: list[tuple[str, str, str]] = [
     ("2764", "heart", "U+2764"),
     ("2b50", "star", "U+2B50"),
     ("1f338", "flower", "U+1F338"),
-    ("1f319", "moon", "U+1F319"),
+    ("1f96e", "moon", "U+1F96E"),
     ("1f382", "cake", "U+1F382"),
     ("1f381", "gift", "U+1F381"),
     ("1f388", "balloon", "U+1F388"),
     ("1f48d", "ring", "U+1F48D"),
-    ("1f343", "leaf", "U+1F343"),
+    ("1f970", "leaf", "U+1F970"),
     ("1f384", "tree", "U+1F384"),
 ]
 

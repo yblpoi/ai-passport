@@ -935,6 +935,13 @@ static void handle_page_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         open_settings();
         return;
     }
+    // 连按两次"上" = 直接回主页。"回主页"本来就是轮播的两端(见 love_view.h),
+    // 这里只是给了个一步到位的快捷方式:翻到列表第 3 页也能一下回去。
+    // (双击下/确定没有定义,按"不做事"处理 —— 别让手快变成改设置。)
+    if (ev == BSP_BTN_DOUBLE) {
+        if (btn == BSP_BTN_UP) goto_slot(LOVE_VIEW_HOME);
+        return;
+    }
     if (ev != BSP_BTN_CLICK) return;
 
     const int total = page_total();

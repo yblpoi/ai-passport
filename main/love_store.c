@@ -16,8 +16,11 @@ static const char *TAG = "love_store";
 
 #define LOVE_NVS_NAMESPACE "love"
 #define KEY_CONFIG "cfg"
+// 老固件的单条凭据。新固件只用它做一次搬迁,migrate_legacy_wifi 之后就会被擦掉。
 #define KEY_WIFI_SSID "wifi_ssid"
 #define KEY_WIFI_PASS "wifi_pass"
+#define KEY_WIFI_LIST "wifi_list"   // love_wifi_cred_t 数组
+#define KEY_WIFI_COUNT "wifi_n"
 #define KEY_AP_OFF "ap_off"
 #define KEY_AP_PASS "ap_pass"
 #define KEY_DEBUG "debug"
@@ -49,6 +52,11 @@ typedef struct {
 } avatar_record_t;
 
 #define AVATAR_VERSION 1u
+
+// NVS 里那份 blob 就是结构体的原始字节,所以两个定长数组之间**不能有填充**:
+// 布局一变,老设备读回来就是错位的凭据。钉住它,并把总数作为注释留在这里。
+_Static_assert(sizeof(love_wifi_cred_t) == LOVE_WIFI_SSID_MAX + LOVE_WIFI_PASS_MAX,
+               "love_wifi_cred_t 必须是紧凑布局(98 字节),它就是 NVS blob 的格式");
 
 static bool s_ready;
 
@@ -183,49 +191,117 @@ esp_err_t love_store_save_config(const love_config_t *cfg)
     return err;
 }
 
-esp_err_t love_store_load_wifi(char *ssid, size_t ssid_size,
-                               char *pass, size_t pass_size)
+esp_err_t love_store_save_wifi_list(const love_wifi_cred_t *list, size_t count)
 {
-    if (!s_ready || !ssid || !pass || ssid_size == 0 || pass_size == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    ssid[0] = '\0';
-    pass[0] = '\0';
-
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle);
-    if (err != ESP_OK) return err;
-
-    size_t size = ssid_size;
-    err = nvs_get_str(handle, KEY_WIFI_SSID, ssid, &size);
-    if (err == ESP_OK) {
-        size = pass_size;
-        err = nvs_get_str(handle, KEY_WIFI_PASS, pass, &size);
-    }
-    nvs_close(handle);
-    return err;
-}
-
-esp_err_t love_store_save_wifi(const char *ssid, const char *pass)
-{
-    if (!ssid || !pass) return ESP_ERR_INVALID_ARG;
     if (!s_ready) return ESP_ERR_INVALID_STATE;
-    if (strlen(ssid) == 0 || strlen(ssid) >= LOVE_WIFI_SSID_MAX ||
-        strlen(pass) >= LOVE_WIFI_PASS_MAX) {
-        return ESP_ERR_INVALID_ARG;
+    if (!list || count == 0 || count > LOVE_WIFI_MAX) return ESP_ERR_INVALID_ARG;
+
+    for (size_t i = 0; i < count; i++) {
+        // 定长数组必须是 NUL 结尾的:strnlen 到不了结尾就说明这份数据是坏的,
+        // 宁可整批拒绝,也不要写进一条后面没有结尾的 SSID(NVS 读回来会越界)。
+        const size_t ssid_len = strnlen(list[i].ssid, LOVE_WIFI_SSID_MAX);
+        const size_t pass_len = strnlen(list[i].pass, LOVE_WIFI_PASS_MAX);
+        if (ssid_len == 0 || ssid_len >= LOVE_WIFI_SSID_MAX ||
+            pass_len >= LOVE_WIFI_PASS_MAX) {
+            return ESP_ERR_INVALID_ARG;
+        }
     }
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) return err;
 
-    err = nvs_set_str(handle, KEY_WIFI_SSID, ssid);
-    if (err == ESP_OK) err = nvs_set_str(handle, KEY_WIFI_PASS, pass);
+    err = nvs_set_u8(handle, KEY_WIFI_COUNT, (uint8_t)count);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(handle, KEY_WIFI_LIST, list, count * sizeof(list[0]));
+    }
     if (err == ESP_OK) err = nvs_commit(handle);
     nvs_close(handle);
     // 不在日志里输出 SSID/密码。
-    if (err != ESP_OK) ESP_LOGE(TAG, "保存 Wi-Fi 凭据失败: %s", esp_err_to_name(err));
+    if (err != ESP_OK) ESP_LOGE(TAG, "保存 Wi-Fi 列表失败: %s", esp_err_to_name(err));
     return err;
+}
+
+// 老固件的单条记录 -> 列表。返回 ESP_OK 表示 out/count 里已经是搬迁后的结果。
+static esp_err_t migrate_legacy_wifi(love_wifi_cred_t *out, size_t max, size_t *count)
+{
+    if (!out || !count || max == 0) return ESP_ERR_INVALID_ARG;
+    *count = 0;
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    char ssid[LOVE_WIFI_SSID_MAX] = { 0 };
+    size_t ssid_size = sizeof(ssid);
+    err = nvs_get_str(handle, KEY_WIFI_SSID, ssid, &ssid_size);
+    if (err == ESP_OK && ssid[0] != '\0') {
+        char pass[LOVE_WIFI_PASS_MAX] = { 0 };
+        size_t pass_size = sizeof(pass);
+        // 开放网络没有密码这一项,读不到就当空密码 —— 那是合法状态,不是错误。
+        if (nvs_get_str(handle, KEY_WIFI_PASS, pass, &pass_size) != ESP_OK) pass[0] = '\0';
+
+        snprintf(out[0].ssid, sizeof(out[0].ssid), "%s", ssid);
+        snprintf(out[0].pass, sizeof(out[0].pass), "%s", pass);
+        *count = 1;
+
+        // 先写新格式、成功了再擦旧键。反过来一旦写到一半失败,凭据就真没了 ——
+        // 而这里两条旧键还在的唯一后果,只是下次开机再搬一遍。
+        err = nvs_set_u8(handle, KEY_WIFI_COUNT, (uint8_t)*count);
+        if (err == ESP_OK) {
+            err = nvs_set_blob(handle, KEY_WIFI_LIST, out, *count * sizeof(out[0]));
+        }
+        if (err == ESP_OK) {
+            (void)nvs_erase_key(handle, KEY_WIFI_SSID);   // 不存在时返回 NOT_FOUND,忽略
+            (void)nvs_erase_key(handle, KEY_WIFI_PASS);
+            err = nvs_commit(handle);
+        }
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Wi-Fi 凭据搬迁未完成(%s),下次开机再试", esp_err_to_name(err));
+            *count = 0;
+        } else {
+            ESP_LOGI(TAG, "Wi-Fi 凭据已迁移到列表格式(1 个热点)");
+        }
+    }
+    nvs_close(handle);
+    return *count > 0 ? ESP_OK : ESP_ERR_NVS_NOT_FOUND;
+}
+
+size_t love_store_load_wifi_list(love_wifi_cred_t *out, size_t max)
+{
+    if (!s_ready || !out || max == 0) return 0;
+    memset(out, 0, max * sizeof(out[0]));
+
+    nvs_handle_t handle;
+    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return 0;
+
+    uint8_t count = 0;
+    size_t size = max * sizeof(out[0]);
+    esp_err_t err = nvs_get_u8(handle, KEY_WIFI_COUNT, &count);
+    if (err == ESP_OK) err = nvs_get_blob(handle, KEY_WIFI_LIST, out, &size);
+    nvs_close(handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        size_t migrated = 0;
+        if (migrate_legacy_wifi(out, max, &migrated) != ESP_OK) return 0;
+        return migrated;
+    }
+    if (err != ESP_OK) return 0;
+
+    // 记录本身是"计数 + blob"两条,理论上不会半新半旧。真读坏了(计数大于 blob、
+    // 或者中间出现空 SSID)就截断到仍然可信的那一段,而不是把整份有效凭据丢掉。
+    size_t stored = size / sizeof(out[0]);
+    if (stored < count) count = (uint8_t)stored;
+    if (count > LOVE_WIFI_MAX) count = LOVE_WIFI_MAX;
+    size_t usable = 0;
+    for (size_t i = 0; i < count; i++) {
+        // 结尾强制补 NUL:blob 里的字符串没有"一定结尾"的保证,后面 strlen 会越界。
+        out[i].ssid[LOVE_WIFI_SSID_MAX - 1] = '\0';
+        out[i].pass[LOVE_WIFI_PASS_MAX - 1] = '\0';
+        if (out[i].ssid[0] == '\0') break;
+        usable++;
+    }
+    return usable;
 }
 
 esp_err_t love_store_clear_wifi(void)
@@ -236,6 +312,8 @@ esp_err_t love_store_clear_wifi(void)
     esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) return err;
 
+    (void)nvs_erase_key(handle, KEY_WIFI_LIST);
+    (void)nvs_erase_key(handle, KEY_WIFI_COUNT);
     (void)nvs_erase_key(handle, KEY_WIFI_SSID);
     (void)nvs_erase_key(handle, KEY_WIFI_PASS);
     err = nvs_commit(handle);

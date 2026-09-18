@@ -1,4 +1,9 @@
-// main/love_net.h —— Wi-Fi 管理:默认热点 + 联网对时。
+// main/love_net.h —— Wi-Fi 管理:**一组**已保存热点 + 默认热点 + 联网对时。
+//
+// 设备最多记住 5 个热点(见 love_store.h 的 LOVE_WIFI_MAX)。开机与断线后的选网
+// 顺序是:先扫描,在已保存的热点里挑信号最强的连;扫不到(包括对方的 SSID 是隐藏的)
+// 再按保存顺序逐个试,每个候选 15 秒。整轮都没连上就退避重来(30 秒起,翻倍到 5 分钟),
+// 这期间**不重连、不打日志** —— 稳态下串口只会看到"5 分钟一条"的失败汇总。
 //
 // 设备按需开热点:从未配网时开机即开(否则没法进后台),已配网时由后台或设置页
 // 主动打开,并有空闲自动关闭。联网成功进入 STA 模式并启动 SNTP 对时;
@@ -16,6 +21,9 @@
 #include <stdint.h>
 
 #define LOVE_NET_SCAN_MAX 12
+// 与 love_store.h 的 LOVE_WIFI_MAX 是同一件事(列表长度)。这里再写一份是为了让
+// 本头文件不必拖着持久化层的头一起被包含;两处对不上时 love_net.c 有静态断言兜底。
+#define LOVE_NET_SAVED_MAX 5
 
 typedef enum {
     LOVE_NET_OFF = 0,      // 服务未启动
@@ -32,14 +40,22 @@ typedef struct {
     // 讲清楚,不然用户分不清"一会儿就会自己回来"和"关掉了就不会自己回来"。
     bool ap_manual_off;
     bool has_credentials;
+    // 已保存的热点个数(0 = 从没配过网)。判断"配没配过网"一律用它,不要看 sta_ssid:
+    // 断网重选期间 sta_ssid 可能还空着。
+    size_t saved_count;
     char ip[16];
     int rssi;
     char ap_ssid[33];
     char ap_pass[65];
-    char sta_ssid[33];     // 已配置的 SSID;密码只写不读
+    char sta_ssid[33];     // 当前正在连接/已连上的那个;密码只写不读
     char site_url[24];     // 热点地址,例如 http://192.168.4.1;热点关闭时为空
     char lan_url[24];      // 局域网地址,例如 http://10.0.0.23;未联网时为空
 } love_net_status_t;
+
+typedef struct {
+    char ssid[33];
+    bool current;          // 当前正在连接/已连上的就是这一条
+} love_net_saved_t;
 
 typedef struct {
     char ssid[33];
@@ -56,10 +72,20 @@ void love_net_deinit(void);
 esp_err_t love_net_ap_start(void);
 esp_err_t love_net_ap_stop(void);
 
-// 保存凭据并连接(后台/设置页调用)。ssid 不能为空。
+// 保存凭据并(在需要时)重新选网。同名 SSID 就地更新密码并保留原来的尝试顺序,
+// 新 SSID 追加在列表末尾;列表满(LOVE_NET_SAVED_MAX)时返回 ESP_ERR_INVALID_STATE。
+// 改的是"当前这条"会断开重连;改的是别的热点则不动现有连接 —— 加一个备用网络不该
+// 把正在用的那个踢掉。
 esp_err_t love_net_set_credentials(const char *ssid, const char *pass);
 
-// 清除凭据并断开,回到热点待配网状态。
+// 删除一条(按 SSID,精确匹配)。找不到返回 ESP_ERR_NOT_FOUND。
+// 删的是当前这条会断开重连;删空等于 love_net_forget()(开热点、清 NVS)。
+esp_err_t love_net_forget_ssid(const char *ssid);
+
+// 已保存的热点列表(按保存顺序)。返回条数。
+size_t love_net_saved_list(love_net_saved_t *out, size_t max);
+
+// 清除全部凭据并断开,回到热点待配网状态。
 esp_err_t love_net_forget(void);
 
 void love_net_get_status(love_net_status_t *out);

@@ -61,13 +61,33 @@ demo，也不要用该分支的旧版 BSP、分区表或配置覆盖当前版本
 | 蓝牙串口控制台 | 在 BLE 串口 App 里敲 `wifi <名称> <密码>` | `main/love_ble.c` 广播一个标准 NUS 服务，手机装上现成的 BLE 串口 App 即可，命令与 USB 控制台完全一致。出厂默认关闭。 |
 | 后台网页 | “网络与热点”卡片 | `main/love_httpd.c`，经设备自带热点或局域网地址访问。前提是这两者之一可达，见[热点生命周期](#热点生命周期)。 |
 
-三条凭据路径都汇聚到 `main/love_net.c` 的 `love_net_set_credentials()` 与
-`love_net_forget()`，因此只有一条凭据通路、一份 NVS 记录。控制台里不带参数的
-`wifi` 打印当前状态，`wifi open <名称>` 连接开放网络，`wifi clear` 清除凭据并
-重新打开热点。
+三条凭据路径都汇聚到 `main/love_net.c` 的 `love_net_set_credentials()`、
+`love_net_forget_ssid()` 与 `love_net_forget()`，因此只有一条凭据通路、一份 NVS 记录。
+控制台里不带参数的 `wifi` 打印当前状态，`wifi open <名称>` 保存开放网络，
+`wifi list` 列出已保存的热点，`wifi del <序号|名称>` 删掉其中一个，
+`wifi clear` 清除全部凭据并重新打开热点。
 
-控制台**不打印密码、也不回读密码**：`love_store_load_wifi()` 是唯一的读取方，
+控制台**不打印密码、也不回读密码**：`love_store_load_wifi_list()` 是唯一的读取方，
 且只被网络层调用。控制台按空格切分参数，因此名称或密码含空格时请改用后台网页。
+
+### 记多个热点：怎么选、怎么退避
+
+设备最多记住 **5 个**热点（`LOVE_WIFI_MAX`），按保存顺序排在 `love_net.c` 的
+`s_saved[]` 里。开机与掉线后的选网顺序是：
+
+1. **先扫描**（约 1~2 秒），在已保存的网络里挑信号最强的那个连；
+2. 扫不到任何一个（包括对方的 SSID 是隐藏的——隐藏网络不会出现在扫描结果里），
+   就按保存顺序**逐个尝试**，每个候选 15 秒（`CONNECT_TIMEOUT_MS`）；
+3. 一整轮都没连上就退避重来：30 秒起、每轮翻倍、上限 5 分钟。
+
+退避期间**不发起重连、也不打日志**——稳态下串口只会看到 5 分钟一条的失败汇总
+（节流常量见 `main/love_net.c` 的 `ROUND_LOG_MIN_INTERVAL_MS`）。这是刻意的：早先的实现
+在断开事件里立刻重连，配过网但热点不在时会以每秒一次的频率刷屏，那既是日志噪音也是
+无谓的射频活动。要看每次尝试的细节可以把驱动日志打开：`log wifi info`。
+
+改凭据的语义：同名 SSID 就地更新密码并保留原来的顺序，新名称追加在末尾，列表满了
+先在网页或 `wifi del` 里删掉一个。改的是"当前这条"会断开重连，改别的热点不动现有连接
+——加一个备用网络不该把正在用的那个踢掉。
 
 ### 热点生命周期
 
@@ -78,7 +98,10 @@ NVS**（`love_store_load_ap_pass()`，显示在设备屏幕上）。原先密码
 | 触发 | 条件 | 代码 |
 | --- | --- | --- |
 | 开机 | 设备没有已保存的凭据 | `love_net_init()` |
-| 联网失败兜底 | 有凭据，但 STA 连续 60 秒没连上 | `love_net_poll()` |
+| 联网失败兜底 | 有凭据，但连续 60 秒既没连上、也不在选网过程中 | `love_net_poll()` |
+
+兜底计时只在"没在尝试连接"的空档里走：一轮候选要花掉几十秒，过程中切到 APSTA 会把
+正在进行的连接打断（`esp_wifi_set_mode()` 会重启射频），那等于白试一轮。
 
 它也可以按需打开：设备设置页的「后台热点」、后台网页的网络卡片，或控制台的
 `ap on`。热点开着且设备已联网时，**连续 5 分钟没有任何活动**（网页每个请求、机身
@@ -107,8 +130,11 @@ NVS**（`love_store_load_ap_pass()`，显示在设备屏幕上）。原先密码
 128 位 UUID，硬塞会让 `ble_gap_adv_set_fields()` 返回 `EMSGSIZE`。
 
 可用命令：`help`、`status`（时间/网络/蓝牙/当前屏与页码/内存/各任务栈余/LVGL 池用量与事件显示序）、
-`wifi …`、`ap`（热点状态、`ap on`、`ap off`）、`time <Unix 秒>`
-对时、`ble on` / `ble off`；另有**只能走 USB** 的 `shot`（见 [serial-screenshot.zh_CN.md](serial-screenshot.zh_CN.md)）、
+`wifi …`（`list` 列出已保存的热点、`del <序号|名称>` 删除一个）、`ap`（热点状态、`ap on`、`ap off`）、
+`time <Unix 秒>` 对时、`ble on` / `ble off`、`log`（看/改日志级别：`log warn` 设全局、
+`log wifi info` 只打开某个模块、`log reset` 恢复默认；默认策略把 `wifi`/`wpa`
+两个驱动 TAG 压到 warn，理由见 [wifi-provisioning 的选网小节](#记多个热点怎么选怎么退避)）；
+另有**只能走 USB** 的 `shot`（见 [serial-screenshot.zh_CN.md](serial-screenshot.zh_CN.md)）、
 `key`（注入一整套按键手势:短按 / 长按 / 连按两次）、`sleep`（触发浅/深睡，用于核对空闲行为）与 `debug on`。
 手机连上并订阅通知后，设备会自动把 `help` 的输出推过去。
 

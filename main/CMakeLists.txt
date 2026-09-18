@@ -17,6 +17,7 @@ idf_component_register(
          "love_httpd.c"
          "love_console_line.c"
          "love_console.c"
+         "love_log.c"
          "love_shot.c"
     INCLUDE_DIRS "."
     # esp_app_format 提供 esp_app_desc.h,本机状态页要读固件版本号。

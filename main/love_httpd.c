@@ -279,6 +279,18 @@ static cJSON *state_to_json(void)
     cJSON_AddStringToObject(net_json, "lanUrl", net.lan_url);
     cJSON_AddBoolToObject(net_json, "hasCredentials", net.has_credentials);
 
+    // 已保存的热点列表(按尝试顺序)。网页据此画"已保存的网络"那一块 ——
+    // 列表是设备说了算,网页不要自己维护一份(多开一个页面就会对不上)。
+    cJSON *saved = cJSON_AddArrayToObject(net_json, "saved");
+    love_net_saved_t entries[LOVE_NET_SAVED_MAX];
+    const size_t saved_count = love_net_saved_list(entries, LOVE_NET_SAVED_MAX);
+    for (size_t i = 0; i < saved_count; i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "ssid", entries[i].ssid);
+        cJSON_AddBoolToObject(item, "current", entries[i].current);
+        cJSON_AddItemToArray(saved, item);
+    }
+
     cJSON *icons = cJSON_AddArrayToObject(root, "icons");
     for (uint8_t i = 0; i < LOVE_ICON_TOTAL; i++) cJSON_AddItemToArray(icons, cJSON_CreateNumber(i));
 
@@ -655,8 +667,34 @@ static esp_err_t handle_wifi_save(httpd_req_t *req)
     esp_err_t err = love_net_set_credentials(ssid->valuestring,
                                              cJSON_IsString(pass) ? pass->valuestring : "");
     cJSON_Delete(root);
+    if (err == ESP_ERR_INVALID_STATE) {
+        return send_error(req, "400 Bad Request", "最多保存 5 个热点,先删掉一个再添加");
+    }
     if (err != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "保存凭据失败");
+    }
+    return send_json(req, state_to_json(), NULL);
+}
+
+static esp_err_t handle_wifi_delete(httpd_req_t *req)
+{
+    love_net_ap_touch();
+
+    cJSON *root = NULL;
+    if (!read_json(req, &root)) return ESP_FAIL;
+
+    const cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
+    if (!cJSON_IsString(ssid) || ssid->valuestring[0] == '\0') {
+        return fail_json(req, root, "400 Bad Request", "请指定要删除的网络名称");
+    }
+
+    const esp_err_t err = love_net_forget_ssid(ssid->valuestring);
+    cJSON_Delete(root);
+    if (err == ESP_ERR_NOT_FOUND) {
+        return send_error(req, "404 Not Found", "没有保存过这个网络");
+    }
+    if (err != ESP_OK) {
+        return send_error(req, "500 Internal Server Error", "删除失败");
     }
     return send_json(req, state_to_json(), NULL);
 }
@@ -701,6 +739,7 @@ static const httpd_uri_t URIS[] = {
     { .uri = "/api/time",      .method = HTTP_POST, .handler = handle_time },
     { .uri = "/api/scan",      .method = HTTP_GET,  .handler = handle_scan },
     { .uri = "/api/wifi",      .method = HTTP_POST, .handler = handle_wifi_save },
+    { .uri = "/api/wifi/delete", .method = HTTP_POST, .handler = handle_wifi_delete },
     { .uri = "/api/wifi/clear", .method = HTTP_POST, .handler = handle_wifi_clear },
     { .uri = "/api/avatar",    .method = HTTP_POST, .handler = handle_avatar },
     { .uri = "/api/avatar/clear", .method = HTTP_POST, .handler = handle_avatar_clear },

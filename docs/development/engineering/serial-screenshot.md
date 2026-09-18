@@ -59,8 +59,12 @@ than sending a torn image.
   semaphore.
 - **Silence every log for the duration.** The host reads exactly the declared
   byte count, so one log byte inside the window corrupts the image. The command
-  sets `esp_log_level_set("*", ESP_LOG_NONE)` before the first header byte and
-  restores the previous level afterwards.
+  calls `love_log_mute_all()` before the first header byte and
+  `love_log_unmute_all()` after the last pixel byte. **Do not call
+  `esp_log_level_set("*", …)` directly**: that branch clears every per-tag level
+  in IDF, so a `log wifi info` the user just enabled would be switched off by a
+  screenshot, and what gets restored is the whole policy (global plus every
+  override) rather than "the previous level".
 - **Write in chunks smaller than the transmit ring buffer.** The console REPL
   installs the USB-Serial-JTAG driver with its default 256-byte buffers, and
   `usb_serial_jtag_write_bytes()` fails immediately for anything larger. Chunks

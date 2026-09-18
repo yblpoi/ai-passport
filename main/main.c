@@ -19,6 +19,7 @@
 #include "bsp_i2c.h"
 #include "bsp_pins.h"      // 错误日志里要打印 BSP_LCD_* 引脚号
 #include "love_app.h"
+#include "love_log.h"
 #include "power_sleep.h"
 
 #include "esp_log.h"
@@ -85,6 +86,10 @@ static esp_err_t input_dispatch_init(void)
 
 void app_main(void)
 {
+    // 日志策略要在其它模块开口之前装好:默认把 wifi/wpa 两个驱动 TAG 降一级,
+    // 否则没连上网时它们的重连状态行会把有用的信息埋掉(见 love_log.c)。
+    love_log_init();
+
     ESP_LOGI(TAG, "FoloToy AI Passport 启动");
     esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
     if (wakeup != ESP_SLEEP_WAKEUP_UNDEFINED) {

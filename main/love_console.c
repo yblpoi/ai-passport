@@ -14,6 +14,7 @@
 #include "love_console_line.h"
 #include "love_event_order.h"
 #include "love_httpd.h"
+#include "love_log.h"
 #include "love_net.h"
 #include "love_shot.h"
 #include "love_store.h"
@@ -124,7 +125,10 @@ static void print_wifi_status(void)
     love_console_out("\n");
 
     if (net.has_credentials) {
-        love_console_out("已配置 Wi-Fi: %s\n", net.sta_ssid);
+        love_console_out("当前: %s\n",
+                         net.sta_ssid[0] ? net.sta_ssid : "(正在选网)");
+        love_console_out("已保存 %u 个热点(wifi list 看全部)\n",
+                         (unsigned)net.saved_count);
     } else if (net.ap_active) {
         love_console_out("尚未配置 Wi-Fi。热点 %s 已开启,密码见设备屏幕。\n", net.ap_ssid);
     } else {
@@ -141,6 +145,24 @@ static void print_wifi_status(void)
     const char *site = net.site_url[0] ? net.site_url
                      : (net.lan_url[0] ? net.lan_url : NULL);
     love_console_out("后台网页: %s\n", site ? site : "暂不可达");
+}
+
+// 已保存的热点:序号固定按尝试顺序,`wifi del` 收的就是这个序号(也收 SSID 原文)。
+static void print_wifi_list(void)
+{
+    love_net_saved_t saved[LOVE_NET_SAVED_MAX];
+    const size_t count = love_net_saved_list(saved, LOVE_NET_SAVED_MAX);
+
+    if (count == 0) {
+        love_console_out("没有已保存的热点。用 wifi <名称> <密码> 添加。\n");
+        return;
+    }
+
+    love_console_out("已保存的热点(按尝试顺序):\n");
+    for (size_t i = 0; i < count; i++) {
+        love_console_out("  %u. %s%s\n", (unsigned)(i + 1), saved[i].ssid,
+                         saved[i].current ? "   ← 当前" : "");
+    }
 }
 
 // 热点是屏幕上那个开关、后台页那两个按钮之外的第三条入口:只有 USB 或蓝牙串口
@@ -183,6 +205,11 @@ static int cmd_wifi(void *ctx, int argc, char **argv)
         return 0;
     }
 
+    if (strcmp(argv[1], "list") == 0) {
+        print_wifi_list();
+        return 0;
+    }
+
     if (strcmp(argv[1], "clear") == 0) {
         if (!command_allowed(src, "清除 Wi-Fi 凭据")) {
             love_console_out("未在设备上确认,已拒绝清除凭据。\n");
@@ -196,15 +223,56 @@ static int cmd_wifi(void *ctx, int argc, char **argv)
         return 0;
     }
 
-    // wifi open <名称> 连接开放网络;wifi <名称> <密码> 连接加密网络。
+    // wifi del <序号|名称>:序号就是 wifi list 里的那个(从 1 开始)。
+    if (strcmp(argv[1], "del") == 0) {
+        if (argc < 3) {
+            love_console_out("用法: wifi del <序号|名称>(序号见 wifi list)\n");
+            return 1;
+        }
+        if (!command_allowed(src, "删除一个已保存的 Wi-Fi")) {
+            love_console_out("未在设备上确认,已拒绝删除凭据。\n");
+            return 1;
+        }
+
+        char target[LOVE_WIFI_SSID_MAX] = { 0 };
+        char *end = NULL;
+        const long index = strtol(argv[2], &end, 10);
+        if (end != argv[2] && *end == '\0') {
+            love_net_saved_t saved[LOVE_NET_SAVED_MAX];
+            const size_t count = love_net_saved_list(saved, LOVE_NET_SAVED_MAX);
+            if (index < 1 || (size_t)index > count) {
+                love_console_out("没有第 %ld 个,用 wifi list 看看现有的。\n", index);
+                return 1;
+            }
+            snprintf(target, sizeof(target), "%s", saved[index - 1].ssid);
+        } else {
+            snprintf(target, sizeof(target), "%s", argv[2]);
+        }
+
+        const esp_err_t err = love_net_forget_ssid(target);
+        if (err == ESP_ERR_NOT_FOUND) {
+            love_console_out("没保存过 \"%s\"。\n", target);
+            return 1;
+        }
+        if (err != ESP_OK) {
+            love_console_out("删除 \"%s\" 失败: %s。\n", target, esp_err_to_name(err));
+            return 1;
+        }
+        love_console_out("已删除 \"%s\"。\n", target);
+        return 0;
+    }
+
+    // wifi open <名称> 添加开放网络;wifi <名称> <密码> 添加加密网络。
     const bool open = (strcmp(argv[1], "open") == 0);
     const int ssid_index = open ? 2 : 1;
     if (argc <= ssid_index || (!open && argc <= ssid_index + 1)) {
         love_console_out("用法:\n"
                          "  wifi                 查看当前状态\n"
-                         "  wifi <名称> <密码>   保存并连接\n"
-                         "  wifi open <名称>     连接开放网络\n"
-                         "  wifi clear           清除已保存的凭据\n");
+                         "  wifi list            列出已保存的热点\n"
+                         "  wifi <名称> <密码>   保存并连接(最多 5 个)\n"
+                         "  wifi open <名称>     保存并连接开放网络\n"
+                         "  wifi del <序号|名称> 删除一个已保存的热点\n"
+                         "  wifi clear           清除全部凭据\n");
         return 1;
     }
 
@@ -219,6 +287,11 @@ static int cmd_wifi(void *ctx, int argc, char **argv)
     }
 
     esp_err_t err = love_net_set_credentials(ssid, pass);
+    if (err == ESP_ERR_INVALID_STATE) {
+        love_console_out("已经保存了 %d 个热点,先 wifi del 删掉一个再添加。\n",
+                         LOVE_NET_SAVED_MAX);
+        return 1;
+    }
     if (err != ESP_OK) {
         love_console_out("保存 \"%s\" 失败: %s。\n", ssid, esp_err_to_name(err));
         return 1;
@@ -626,6 +699,74 @@ static int cmd_shot(void *ctx, int argc, char **argv)
 
 static int cmd_help(void *ctx, int argc, char **argv);
 
+// 日志级别:查/改全局、按模块改。默认策略(wifi/wpa 降到 warn)在 love_log.c 里。
+static int cmd_log(void *ctx, int argc, char **argv)
+{
+    (void)ctx;
+
+    if (argc == 1) {
+        love_console_out("全局: %s\n", love_log_level_name(love_log_global_level()));
+        love_log_override_t list[LOVE_LOG_TAG_COUNT];
+        const size_t count = love_log_overrides(list, LOVE_LOG_TAG_COUNT);
+        for (size_t i = 0; i < count; i++) {
+            love_console_out("  %-12s %s\n", list[i].tag, love_log_level_name(list[i].level));
+        }
+        love_console_out("(编译进来的上限是 %s,更啰嗦的级别没有编进固件)\n",
+                         love_log_level_name(LOVE_LOG_BUILD_MAX));
+        love_console_out("(设置不落盘:重启后回到默认)\n");
+        return 0;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "reset") == 0) {
+        love_log_reset();
+        love_console_out("已恢复默认:全局 %s,wifi/wpa 为 warn。\n",
+                         love_log_level_name(love_log_global_level()));
+        return 0;
+    }
+
+    esp_log_level_t level;
+    const char *level_text = (argc == 3) ? argv[2] : (argc == 2 ? argv[1] : NULL);
+    if (!level_text || !love_log_level_parse(level_text, &level)) {
+        love_console_out("用法:\n"
+                         "  log                   查看当前级别\n"
+                         "  log <级别>            设置全局(none/off/error/warn/info)\n"
+                         "  log <模块> <级别>     只改一个模块(模块名 = 日志行里的 TAG)\n"
+                         "  log reset             恢复默认\n");
+        return 1;
+    }
+
+    const esp_err_t err = (argc == 3) ? love_log_set_tag(argv[1], level)
+                                       : love_log_set_global(level);
+    if (err == ESP_ERR_NOT_SUPPORTED) {
+        love_console_out("%s 比固件里编进来的上限(%s)更啰嗦,改不了。\n",
+                         level_text, love_log_level_name(LOVE_LOG_BUILD_MAX));
+        return 1;
+    }
+    if (err == ESP_ERR_NO_MEM) {
+        love_console_out("模块表满了(最多 %d 个),先 log reset。\n", LOVE_LOG_TAG_COUNT);
+        return 1;
+    }
+    if (err == ESP_ERR_INVALID_SIZE) {
+        love_console_out("模块名太长(最多 %d 个字符)。\n", LOVE_LOG_TAG_MAX - 1);
+        return 1;
+    }
+    if (err == ESP_ERR_INVALID_ARG && argc == 3) {
+        love_console_out("\"*\" 要改全局,直接 log <级别> 就行。\n");
+        return 1;
+    }
+    if (err != ESP_OK) {
+        love_console_out("设置失败: %s。\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    if (argc == 3) {
+        love_console_out("%s 的日志级别 → %s。\n", argv[1], love_log_level_name(level));
+    } else {
+        love_console_out("全局日志级别 → %s。\n", love_log_level_name(level));
+    }
+    return 0;
+}
+
 typedef struct {
     const char *name;
     const char *help;
@@ -633,11 +774,12 @@ typedef struct {
 } love_command_t;
 
 static const love_command_t COMMANDS[] = {
-    { "wifi",   "配置 Wi-Fi:wifi / wifi <名称> <密码> / wifi open <名称> / wifi clear", cmd_wifi },
+    { "wifi",   "配置 Wi-Fi:wifi / wifi list / wifi <名称> <密码> / wifi del <序号|名称> / wifi clear", cmd_wifi },
     { "ap",     "后台热点:ap(看状态)/ ap on / ap off(关掉后不再自动开)", cmd_ap },
     { "ble",    "蓝牙串口:ble(看状态)/ ble on / ble off", cmd_ble },
     { "time",   "对时:time 看当前时间,time <Unix 秒> 写入", cmd_time },
     { "status", "时间、网络、蓝牙、内存与事件列表序", cmd_status },
+    { "log",    "日志级别:log / log <级别> / log <模块> <级别> / log reset", cmd_log },
     { "shot",   "截图:把当前屏幕以 RGB565 经 USB 串口发出(见 tools/screenshot.py)", cmd_shot },
     // 发布流程按 docs/reference/y2lin/serial-screenshot-protocol.md 发的是这个字面量,
     // 所以它得是一条可用的命令名,而不是只写在文档里的约定。

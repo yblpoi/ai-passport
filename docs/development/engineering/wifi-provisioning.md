@@ -69,16 +69,42 @@ last two share one command set. None of them replaces another.
 | Bluetooth serial console | `wifi <ssid> <password>` in a BLE serial app | `main/love_ble.c` advertises a standard Nordic UART Service, so off-the-shelf apps work. The command set is identical to the USB console. Off by default. |
 | Admin web page | Network and hotspot card | `main/love_httpd.c`, served over the device's own hotspot or over the LAN address. Reaching it needs one of those two; see [Hotspot lifecycle](#hotspot-lifecycle). |
 
-All credential paths converge on `love_net_set_credentials()` and
-`love_net_forget()` in `main/love_net.c`, so there is one credential path and one
-NVS record. From the console, `wifi` with no arguments prints the current state,
-`wifi open <ssid>` joins an open network, and `wifi clear` forgets the
-credentials and reopens the hotspot.
+All credential paths converge on `love_net_set_credentials()`,
+`love_net_forget_ssid()` and `love_net_forget()` in `main/love_net.c`, so there is
+one credential path and one NVS record. From the console, `wifi` with no arguments
+prints the current state, `wifi open <ssid>` saves an open network, `wifi list`
+lists the saved networks, `wifi del <index|ssid>` removes one, and `wifi clear`
+forgets everything and reopens the hotspot.
 
-The console never logs the password and never reads it back: `love_store_load_wifi()`
-is the only reader and the network layer is the only caller. The console parser
-splits arguments on spaces, so an SSID or password containing a space has to be
-entered from the web page instead.
+The console never logs the password and never reads it back:
+`love_store_load_wifi_list()` is the only reader and the network layer is the only
+caller. The console parser splits arguments on spaces, so an SSID or password
+containing a space has to be entered from the web page instead.
+
+### Remembering several networks: selection and backoff
+
+The device remembers up to **5** networks (`LOVE_WIFI_MAX`), in save order, in
+`s_saved[]` inside `love_net.c`. After boot and after a dropped connection it picks
+one like this:
+
+1. **Scan first** (about 1-2 s) and join the strongest saved network it sees;
+2. if none is seen — including hidden SSIDs, which never show up in a scan — try the
+   saved networks **in order**, 15 s each (`CONNECT_TIMEOUT_MS`);
+3. if a whole round fails, back off and retry: 30 s, doubling each round, capped at
+   5 minutes.
+
+During the backoff it neither reconnects nor logs, so a device that cannot reach any
+known network settles into one summary line every 5 minutes (the throttle constant is
+`ROUND_LOG_MIN_INTERVAL_MS`). That is deliberate: the earlier implementation called
+`esp_wifi_connect()` straight from the disconnect event, which with credentials
+saved but the network gone meant a reconnect every second plus one warning each
+time. For per-attempt detail, raise the driver logs with `log wifi info`.
+
+Credential edits: an existing SSID updates its password in place and keeps its
+position, a new name is appended, and a full list means you delete one first (web
+page or `wifi del`). Editing the network the device is currently on reconnects;
+editing any other one leaves the live connection alone — adding a spare network
+should not kick the device off the one it is using.
 
 ### Hotspot lifecycle
 
@@ -91,7 +117,11 @@ which has no authentication of its own. It opens automatically in exactly two si
 | Trigger | Condition | Code |
 | --- | --- | --- |
 | Boot | The device has no saved credentials | `love_net_init()` |
-| Station-down fallback | Credentials exist but the station has not been connected for 60 s | `love_net_poll()` |
+| Station-down fallback | Credentials exist but the station has neither connected nor been in a selection round for 60 s | `love_net_poll()` |
+
+The fallback timer only runs while no attempt is in flight: a round of candidates
+takes tens of seconds, and switching to APSTA in the middle of one restarts the
+radio (`esp_wifi_set_mode()`), which would throw that round away.
 
 It also opens on demand from the device settings page, the network card of the
 admin page, or the `ap on` console command. While it is open and the station is
@@ -128,9 +158,14 @@ packet cannot hold the flags, the device name and a 128-bit UUID, and
 
 Available commands: `help`, `status` (time, network, Bluetooth, the screen you are
 on and its page number, memory, the task stack watermarks, the LVGL pool and the
-event order), `wifi …`,
+event order), `wifi …` (`list` prints the saved networks, `del <index|ssid>`
+removes one),
 `ap` (hotspot state, `ap on`, `ap off`),
 `time <unix seconds>` to set the clock, `ble on` / `ble off`,
+`log` (read or set log levels: `log warn` for the global level, `log wifi info` for
+one tag, `log reset` back to the defaults — the default policy already pushes the
+`wifi` and `wpa` driver tags down to warn, see
+[selection and backoff](#remembering-several-networks-selection-and-backoff)),
 and the **USB-only** `shot` (see [serial-screenshot.md](serial-screenshot.md)),
 `key` (inject a whole button gesture: press, long press or double press), `sleep` (trigger light/deep sleep, for checking the
 idle behaviour) and `debug on`. Once a phone has connected and subscribed

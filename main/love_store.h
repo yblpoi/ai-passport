@@ -22,6 +22,15 @@ typedef enum {
 
 #define LOVE_WIFI_SSID_MAX 33
 #define LOVE_WIFI_PASS_MAX 65
+// 最多记住几个热点。定 5 是"家里 + 公司 + 两台手机热点 + 一个备用"的量级:
+// 再多也没人管得过来,而且每个候选都要花掉一次连接尝试的时间。
+#define LOVE_WIFI_MAX 5
+
+// 一条已保存的 Wi-Fi 凭据。密码只写入、不读出用于展示(连接时由 love_net 回读)。
+typedef struct {
+    char ssid[LOVE_WIFI_SSID_MAX];
+    char pass[LOVE_WIFI_PASS_MAX];
+} love_wifi_cred_t;
 
 // 初始化 NVS。**不含载入**:配置由调用方自己 love_store_load_config() 取到它的状态里
 // (缺失时那份接口会给出默认值,不会往 NVS 里写东西)。
@@ -35,10 +44,13 @@ void love_config_defaults(love_config_t *cfg);
 void love_store_load_config(love_config_t *cfg);
 esp_err_t love_store_save_config(const love_config_t *cfg);
 
-// Wi-Fi 凭据。密码只写入、不读出用于展示。
-esp_err_t love_store_load_wifi(char *ssid, size_t ssid_size,
-                               char *pass, size_t pass_size);
-esp_err_t love_store_save_wifi(const char *ssid, const char *pass);
+// Wi-Fi 凭据列表,**按保存顺序**排列(越靠前越先被尝试)。返回条数,0 = 从没配过网。
+//
+// 老固件只存一条(键 wifi_ssid/wifi_pass):首次读到那种布局时自动搬进列表并擦掉
+// 旧键。搬迁是幂等的 —— 写新格式失败就不擦旧键,下次开机再搬一遍,凭据不会丢。
+size_t love_store_load_wifi_list(love_wifi_cred_t *out, size_t max);
+esp_err_t love_store_save_wifi_list(const love_wifi_cred_t *list, size_t count);
+// 清空整个列表(连老格式的两个键一起擦,否则搬迁逻辑会把它们又捡回来)。
 esp_err_t love_store_clear_wifi(void);
 
 // "用户手动关掉了后台热点"这一意图位。设备必须尊重它:手动关掉之后,即使联网失败

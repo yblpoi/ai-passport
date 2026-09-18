@@ -3,6 +3,7 @@
 
 #include "bsp_display.h"
 #include "bsp_pins.h"
+#include "love_log.h"
 
 #include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
@@ -145,8 +146,9 @@ bool love_shot_send(void)
     if (!s_done) return false;
 
     // 二进制窗口期间必须一个日志字节都不能混进来:主机是按声明字节数精确读取的。
-    const esp_log_level_t saved_level = esp_log_level_get("*");
-    esp_log_level_set("*", ESP_LOG_NONE);
+    // 走 love_log 而不是直接 esp_log_level_set("*"):后者会**清掉所有按 TAG 的覆盖**
+    // (见 love_log.h),用户 `log wifi info` 打开的东西会被截屏悄悄关掉。
+    love_log_mute_all();
 
     s_ok = false;
     bool queued = false;
@@ -170,7 +172,7 @@ bool love_shot_send(void)
         s_capturing = false;   // 没投递出去,别把标志留在置位状态
     }
 
-    esp_log_level_set("*", saved_level);
+    love_log_unmute_all();
 
     if (!queued) {
         ESP_LOGW(TAG, "拿不到 LVGL 锁,未截图");

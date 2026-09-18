@@ -3,9 +3,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-int ui_pixel_blink_frame(uint32_t elapsed_ms);
-int ui_pixel_jump_offset(unsigned frame);
-
 // 圆角遮罩:返回非 0 表示像素 (x, y) 落在圆角矩形之外,应当透明。
 //
 // 判定用像素中心到该角圆弧圆心的距离:弧心在 (radius, radius) /

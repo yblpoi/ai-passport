@@ -15,7 +15,7 @@
 资源分成三个文本 + 一张底纹,是因为设备发不完大响应。页面曾经把 122 KB 的像素字体
 以 base64 内联在 HTML 里,单次响应 214923 字节,在热点上必然撞上 socket 发送超时
 (httpd_sock_err: error in send : 11)。字体现在整个去掉了(预览用系统字体);
-图标反过来内联回 JS —— 它们只有两千多字节,拆成十六个请求只会把堆压到发不出帧。
+图标反过来内联回 JS —— 它们只有两千多字节,拆成十几个请求只会把堆压到发不出帧。
 
 用法(仓库根目录):
     python3 tools/gen_admin_page.py
@@ -90,7 +90,7 @@ def decode_png(data_uri: str, what: str) -> bytes:
 
 def render_script(script: str, assets: dict) -> str:
     # 图标以 data URI 内联在脚本里。它们一共只有两千多字节,拆成 /icon/N.png 会让
-    # 一次页面加载多出十六个并发请求,把本来就紧的堆压到发不出帧(实测最大连续块
+    # 一次页面加载多出十几个并发请求,把本来就紧的堆压到发不出帧(实测最大连续块
     # 掉到 1280 字节,低于 Wi-Fi 驱动发一帧所需的 ~1600)。图标不是体积瓶颈:
     # 当初让页面打不开的是 167KB 的像素字体,那个已经删掉了。
     icons = [{"label": icon["label"], "data": icon["data"]} for icon in assets["icons"]]
@@ -129,12 +129,12 @@ def write_text_header(html: str, css: str, script: str) -> None:
         encoding="utf-8")
 
 
-def write_blob_header(bg_tile: bytes, page_icon: bytes) -> None:
+def write_blob_header(bg_tile: bytes, page_icon: bytes, icon_count: int) -> None:
     BLOB_OUTPUT.write_text(
         "// main/love_web_assets.h —— 由 tools/gen_admin_page.py 生成,请勿手改。\n"
         "// 素材来自 assets/images/love_pixel_art_gen.py,后台网页与设备界面用的是\n"
         "// 同一份素材。这些是原始字节(不是 base64),分块发给浏览器。\n"
-        "// 十六个图标不在这里:它们太小,以 data URI 内联在 admin.js 里更省连接数。\n"
+        f"// {icon_count} 个图标不在这里:它们太小,以 data URI 内联在 admin.js 里更省连接数。\n"
         "// 页面图标要单独放进固件,是因为浏览器会主动请求 /favicon.ico 和\n"
         "// /apple-touch-icon*.png,那些路径没法用内联的 data URI 应答。\n"
         "#pragma once\n"
@@ -180,7 +180,8 @@ def main() -> int:
         return 1
 
     write_text_header(html, css, script)
-    write_blob_header(bg_tile, decode_png(heart["data"], f"页面图标 {PAGE_ICON_ID}"))
+    write_blob_header(bg_tile, decode_png(heart["data"], f"页面图标 {PAGE_ICON_ID}"),
+                      len(assets["icons"]))
 
     print(f"admin page: {TEXT_OUTPUT.relative_to(ROOT)} "
           f"(HTML {len(html.encode())} + CSS {len(css.encode())} + "

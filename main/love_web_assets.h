@@ -1,7 +1,7 @@
 // main/love_web_assets.h —— 由 tools/gen_admin_page.py 生成,请勿手改。
 // 素材来自 assets/images/love_pixel_art_gen.py,后台网页与设备界面用的是
 // 同一份素材。这些是原始字节(不是 base64),分块发给浏览器。
-// 十六个图标不在这里:它们太小,以 data URI 内联在 admin.js 里更省连接数。
+// 18 个图标不在这里:它们太小,以 data URI 内联在 admin.js 里更省连接数。
 // 页面图标要单独放进固件,是因为浏览器会主动请求 /favicon.ico 和
 // /apple-touch-icon*.png,那些路径没法用内联的 data URI 应答。
 #pragma once

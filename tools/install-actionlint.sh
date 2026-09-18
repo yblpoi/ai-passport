@@ -49,10 +49,13 @@ if ! curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
     gh release download "v${version}" --repo rhysd/actionlint \
         --pattern "${archive_name}" --dir "${destination}"
 fi
-if command -v sha256sum >/dev/null 2>&1; then
-    printf '%s  %s\n' "${checksum}" "${archive_path}" | sha256sum --check --status
-elif command -v shasum >/dev/null 2>&1; then
+# 校验顺序刻意让 shasum 先走:新版 macOS 自带一个 Darwin 版的 /sbin/sha256sum,
+# 它不认 --check(会打一句 usage 然后失败),而它排在前面时就会把校验卡死。
+# shasum -a 256 在 macOS 与任何带 Perl 的系统上都对;只有它不存在时才用 GNU 的。
+if command -v shasum >/dev/null 2>&1; then
     [[ "$(shasum -a 256 "${archive_path}" | awk '{print $1}')" == "${checksum}" ]]
+elif command -v sha256sum >/dev/null 2>&1; then
+    printf '%s  %s\n' "${checksum}" "${archive_path}" | sha256sum --check --status
 else
     echo "No SHA-256 verification tool is available" >&2
     exit 1

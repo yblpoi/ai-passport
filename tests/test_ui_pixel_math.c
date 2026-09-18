@@ -191,17 +191,6 @@ int main(void)
     }
     for (int i = 0; i < DATA_BYTES; i++) test_packed[i] = 0x11;   // 只用索引 1
 
-    assert(ui_pixel_blink_frame(0) == 0);
-    assert(ui_pixel_blink_frame(1700) == 1);
-    assert(ui_pixel_blink_frame(1850) == 0);
-
-    assert(ui_pixel_jump_offset(0) == 0);
-    assert(ui_pixel_jump_offset(1) == -3);
-    assert(ui_pixel_jump_offset(2) == -5);
-    assert(ui_pixel_jump_offset(3) == -3);
-    assert(ui_pixel_jump_offset(4) == 0);
-    assert(ui_pixel_jump_offset(99) == 0);
-
     test_corner_cut_is_symmetric();
     test_corner_cut_pixel_count();
     test_corner_cut_degenerate_inputs();

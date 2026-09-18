@@ -238,6 +238,19 @@ Store reusable source images and generated display assets in `images/`.
   palette index while packing the image as I4, using the same
   `ui_pixel_corner_cut()` mask (the avatar palette has no transparent entry of its
   own, so one unused index is given alpha 0).
+- Avatar photos are **processed in the browser**; the device only ever receives
+  40×40, 800 bytes of 4 bpp index data (`POST /api/avatar`). The web side runs
+  `assets/web/avatar_slic.js`: centre-crop to a square, scale to a 240×240 working
+  image, cluster it into regions with **SLIC superpixels** (Lab colour plus
+  position), then let each 40×40 output cell take a majority vote and paint it with
+  that region's mean colour before mapping to the device's sixteen. Nearest-colour
+  per pixel turns a photo's gradients into a dot screen; merging by region first
+  makes the colour blocks follow the boundaries of a face, hair or background. The
+  three strengths (soft/standard/strong) set the superpixel granularity and the
+  iteration count. The kernel lives in its own file so a host test can run it
+  directly: `tests/test_avatar_slic.mjs` loads it with node's `vm` and asserts on
+  synthetic images, while `tools/gen_admin_page.py` inlines it into `admin.js` — a
+  page load still makes one `/admin.js` request.
 - Conversion steps: run `python3 assets/images/love_pixel_art_gen.py` from the
   repository root. It reads `images/emoji/*.png`, so swapping an icon means editing
   the `EMOJI` list in the generator (name, label, code point); changing the art

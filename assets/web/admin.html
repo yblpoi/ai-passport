@@ -73,6 +73,14 @@
     </div>
     <label>第一个人头像</label><div class="icons" id="iconsA"></div>
     <label>第二个人头像</label><div class="icons" id="iconsB"></div>
+    <!-- 只影响"往空槽传照片"时的处理：设备端存的还是 40x40、16 色，网页这边用
+         SLIC 超像素把照片按区域抹平成像素画，档位决定超像素的粗细。 -->
+    <label for="avatarStrength">照片像素化强度<span class="muted">（上传照片时使用）</span></label>
+    <select id="avatarStrength">
+      <option value="soft">弱：保留更多细节</option>
+      <option value="normal" selected>标准</option>
+      <option value="strong">强：大块平涂，更像海报</option>
+    </select>
   </div>
 
   <div class="card">
@@ -120,10 +128,14 @@
     <h2>网络与热点</h2>
     <div class="kv"><span>网络状态</span><b><span class="pill" id="netPill">--</span></b></div>
     <div class="kv"><span>IP 地址</span><b id="netIp">--</b></div>
-    <div class="kv"><span>已配置 Wi-Fi</span><b id="netSsid">--</b></div>
+    <div class="kv"><span>当前网络</span><b id="netSsid">--</b></div>
     <div class="kv"><span>热点地址</span><b id="netUrl">--</b></div>
     <div class="kv"><span>局域网地址</span><b id="netLanUrl">--</b></div>
     <div class="kv"><span>热点</span><b id="apInfo">--</b></div>
+    <!-- 已保存的网络：设备最多记 5 个，开机与断线后会先扫描、在这些网络里挑信号最强的连。
+         列表以设备为准（每 10 秒随 /api/state 刷新），网页不自己维护一份。 -->
+    <label>已保存的网络<span class="muted">（按尝试顺序，最多 5 个）</span></label>
+    <ul class="saved" id="savedList"></ul>
     <div class="row" style="margin-top:12px">
       <button type="button" class="ghost" id="scanBtn">扫描附近 Wi-Fi</button>
       <button type="button" class="ghost" id="apOn">开热点</button>
@@ -137,9 +149,10 @@
     <input type="password" id="wifiPass" placeholder="密码不会回显，也不会出现在日志里">
     <div class="row" style="margin-top:12px">
       <button type="button" class="primary" id="wifiSave">保存并连接</button>
-      <button type="button" class="ghost" id="wifiClear">清除凭据</button>
+      <button type="button" class="ghost" id="wifiClear">清除全部凭据</button>
     </div>
-    <p class="muted">清除凭据后设备会重新打开热点，便于重新配置。热点默认开启 5 分钟无操作后自动关闭。
+    <p class="muted">保存过的网络会一直记着：不在范围内就试下一个，都不在就等一会儿再扫。
+      清除全部凭据后设备会重新打开热点，便于重新配置。热点默认开启 5 分钟无操作后自动关闭。
       局域网地址由路由器 DHCP 分配，随时可能变化；这里显示的是设备当前实际持有的地址。</p>
   </div>
 

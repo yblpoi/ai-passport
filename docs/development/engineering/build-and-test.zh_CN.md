@@ -130,6 +130,12 @@ cc -std=c11 -Wall -Wextra -Werror -Imain \
 
 静态门禁还将真实 BSP 和 demo 实现与轻量平台桩编译在一起，故障注入覆盖任务退出交接与停止重试、录音失败、Wi-Fi/BLE 启动回滚、按键分配与 ADC 错误、LVGL 初始化锁与重试、codec 打开/休眠/唤醒恢复。只需主机 C 编译器和 Python，不依赖 ESP-IDF 或已下载的 Managed Components。这些测试不代表真实时序、电气行为或设备兼容性；固件门禁会使用锁定依赖进行编译。
 
+页面里的纯逻辑同样在主机上测：头像的像素化内核（`assets/web/avatar_slic.js`）是纯函数，
+`tests/test_avatar_slic.mjs` 用 node 的 `vm` 加载**要发布的那份代码**并断言输出（纯色不出现
+杂色、两块颜色的边界干净、全透明给白、同一输入两次一致、三档强度、4bpp 半字节顺序），
+同时验证 `admin.js` 的四个占位符替换后能作为整段脚本解析。这一条需要 `node`：**没装 node
+时脚本会打印 `SKIP` 并跳过**（不失败），所以本地/CI 的日志里会明确写出"没跑"。
+
 统一验证入口：
 
 ```bash

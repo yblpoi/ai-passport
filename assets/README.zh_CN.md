@@ -173,6 +173,15 @@
   两端保持一致：网页端 `assets/web/admin.css` 只给自定义头像的 `img.rounded` 加圆角，
   设备端 custom 头像在打包成 I4 时把角落改指到透明索引
   （头像调色板没有透明项），复用的正是同一个 `ui_pixel_corner_cut()`。
+- 自定义头像的**照片处理在网页端完成**，设备只收 40×40、800 字节的 4bpp 索引数据
+  （`POST /api/avatar`）。网页那边走 `assets/web/avatar_slic.js`：先把照片居中裁成
+  正方形、缩到 240×240 的工作图，再用 **SLIC 超像素**按 Lab 颜色+位置聚类成一片片
+  区域，最后按 40×40 的输出格子做多数投票、用该区域的平均色填格，再映射到设备那
+  16 色。逐像素取最近色会把照片的渐变打成网点，按区域合并后色块才会沿着脸、头发、
+  背景的边界走。三档"像素化强度"（弱/标准/强）改的是超像素粒度与迭代次数。
+  这个内核单独成文件就是为了能被主机测试直接跑：`tests/test_avatar_slic.mjs`
+  用 node 的 vm 加载它、喂合成图断言输出（`tools/gen_admin_page.py` 再把它内联进
+  `admin.js`，页面上仍然只有一个 `/admin.js` 请求）。
 - 转换步骤：仓库根目录执行 `python3 assets/images/love_pixel_art_gen.py`。它读
   `images/emoji/*.png`，换图标就是在生成器的 `EMOJI` 列表里改（名字、标签、码位）；
   要换素材本身还要同步 `images/fetch_emoji.py` 并重新 vendored。之后**必须重跑**

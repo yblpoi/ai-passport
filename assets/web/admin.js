@@ -26,27 +26,18 @@ async function api(path, options){
 }
 
 /* ---------- 自定义头像：网页压缩 -> 设备存 4bpp ---------- */
+// 像素化的内核在 assets/web/avatar_slic.js（SLIC 超像素 + 16 色量化），由
+// tools/gen_admin_page.py 内联在下面这一行。它单独成文件是为了能被主机测试直接跑
+// （tests/test_avatar_slic.mjs）—— 这段数学要是只活在浏览器里，就只能靠肉眼验收了。
+__AVATAR_SLIC_JS__
 
-// 在设备那张 16 色调色板里找最接近的颜色(欧氏距离)。像素风素材本来就只有这 16 色,
-// 所以量化后观感一致;照片会退化成这 16 色的网点图,这正是"像素头像"要的效果。
-function nearestPaletteIndex(r, g, b){
-  let best = 0, bestD = Infinity;
-  for(let i = 0; i < PALETTE.length; i++){
-    const p = PALETTE[i];
-    const d = (r - p[0]) ** 2 + (g - p[1]) ** 2 + (b - p[2]) ** 2;
-    if(d < bestD){ bestD = d; best = i; }
-  }
-  return best;
-}
-
-// 选中的图片 -> 40x40、量化到 16 色、打成 4bpp(每字节两个像素,高半字节在前)。
-// 先居中裁成正方形再缩放,避免把脸拉扁。
+// 选中的图片 -> 居中裁成正方形 -> 240x240 工作图 -> SLIC -> 40x40、16 色、4bpp。
 //
 // 用 <img> 而不是 createImageBitmap 解码:iPhone 相册默认是 HEIC,Safari 的
 // createImageBitmap 对它的支持比 <img> 窄得多;走 <img> 就是走浏览器自己的
 // 图像管线,手机直接拍的照片也能选。解码失败时给一句人话,不要把原始异常抛到
 // toast 里。
-async function compressAvatar(file){
+async function compressAvatar(file, gearName){
   const url = URL.createObjectURL(file);
   try {
     const bitmap = await new Promise((resolve, reject) => {
@@ -58,22 +49,16 @@ async function compressAvatar(file){
 
     const w = bitmap.naturalWidth, h = bitmap.naturalHeight;
     const side = Math.min(w, h);
+    const work = AVA * SLIC_WORK_SCALE;
     const canvas = document.createElement("canvas");
-    canvas.width = AVA; canvas.height = AVA;
+    canvas.width = work; canvas.height = work;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(bitmap, (w - side) / 2, (h - side) / 2, side, side, 0, 0, AVA, AVA);
-    const px = ctx.getImageData(0, 0, AVA, AVA).data;
+    // 先居中裁成正方形再缩放，避免把脸拉扁（设备端只做满幅方角 + 4px 圆角，圆角在
+    // 解码时切；网页预览用 CSS 的 border-radius 对齐）。
+    ctx.drawImage(bitmap, (w - side) / 2, (h - side) / 2, side, side, 0, 0, work, work);
+    const px = ctx.getImageData(0, 0, work, work).data;
 
-    const out = new Uint8Array(AVATAR_BYTES);
-    for(let i = 0; i < AVA * AVA; i++){
-      // 近乎透明的像素直接给白色(索引 1 = W),免得压出脏边
-      const idx = px[i*4 + 3] >= 128
-        ? nearestPaletteIndex(px[i*4], px[i*4 + 1], px[i*4 + 2])
-        : 1;
-      if(i % 2 === 0) out[i >> 1] = idx << 4;
-      else out[i >> 1] |= idx;
-    }
-    return out;
+    return packAvatar4bpp(slicPixelate(px, AVA, PALETTE, gearName));
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -122,7 +107,8 @@ function setAvatarImg(el, idx){
 }
 
 async function uploadAvatar(slot, file){
-  const bytes = await compressAvatar(file);
+  const gear = byId("avatarStrength") ? byId("avatarStrength").value : DEFAULT_GEAR;
+  const bytes = await compressAvatar(file, gear);
   const res = await fetch(`/api/avatar?slot=${slot}`, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
@@ -651,7 +637,8 @@ function renderTimeAndNet(state){
   np.textContent = net.stateText;
   np.className = "pill " + (net.state === "connected" ? "ok" : (net.ap ? "warn" : ""));
   byId("netIp").textContent = net.ip || "—";
-  byId("netSsid").textContent = net.ssid || "尚未配置";
+  byId("netSsid").textContent = net.ssid || (net.hasCredentials ? "（正在选网）" : "尚未配置");
+  renderSavedList(net);
   byId("netUrl").textContent = net.url || "热点已关闭";
   // 热点空闲关闭后(默认 5 分钟无操作)只能从同一局域网访问,所以两个地址都要给。
   byId("netLanUrl").textContent = net.lanUrl || "未联网";
@@ -673,6 +660,56 @@ async function load(){
   // 先吃时间与电量，预览里的对时文案和右上角电量才不会先渲染成占位符。
   renderTimeAndNet(state);
   renderAll();
+}
+
+/* ---------- 已保存的网络 ---------- */
+
+// 列表内容全部来自设备(/api/state 的 net.saved)，网页不自己维护一份 ——
+// 同时开两个页面、或者从串口删掉一个，两边就不会各说各话。
+//
+// 一律用 textContent 拼，**不要用 innerHTML**：SSID 是空口上谁都能写的字符串，
+// 把它当 HTML 插进页面等于让一个恶意的热点名字往后台页里注入脚本。
+function renderSavedList(net){
+  const list = byId("savedList");
+  list.innerHTML = "";
+  const saved = net.saved || [];
+
+  if(!saved.length){
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = "还没保存任何网络，用下面的表单添加（最多 5 个）";
+    list.appendChild(li);
+    return;
+  }
+
+  saved.forEach((item, index) => {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = `${index + 1}. ${item.ssid}`;
+    li.appendChild(name);
+    if(item.current){
+      const cur = document.createElement("span");
+      cur.className = "cur";
+      cur.textContent = "当前";
+      li.appendChild(cur);
+    }
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "ghost";
+    del.textContent = "删除";
+    del.onclick = () => removeSaved(item.ssid);
+    li.appendChild(del);
+    list.appendChild(li);
+  });
+}
+
+async function removeSaved(ssid){
+  if(!confirm(`删除已保存的「${ssid}」？删掉之后设备不会再自动连它。`)) return;
+  try{
+    await api("/api/wifi/delete", {method:"POST", body: JSON.stringify({ssid})});
+    toast("已删除 " + ssid);
+    setTimeout(()=>load().catch(()=>{}), 1200);
+  }catch(e){ toast("删除失败：" + e.message); }
 }
 
 // 只刷自定义头像(不碰 model，免得把用户没保存的编辑冲掉)
@@ -725,7 +762,13 @@ byId("scanBtn").onclick = async () => {
     if(!data.aps.length){ list.innerHTML = '<li class="muted">没有扫描到网络</li>'; return; }
     data.aps.forEach(ap => {
       const li = document.createElement("li");
-      li.innerHTML = `<span>${ap.ssid || "(隐藏)"}${ap.secure ? " 🔒" : ""}</span><span>${ap.rssi} dBm</span>`;
+      // 用 textContent 而不是 innerHTML:SSID 来自空口,谁都能取成一个带尖括号的名字。
+      const name = document.createElement("span");
+      name.textContent = (ap.ssid || "(隐藏)") + (ap.secure ? " 🔒" : "");
+      li.appendChild(name);
+      const signal = document.createElement("span");
+      signal.textContent = `${ap.rssi} dBm`;
+      li.appendChild(signal);
       li.onclick = () => { byId("wifiSsid").value = ap.ssid; toast("已填入 " + ap.ssid); };
       list.appendChild(li);
     });

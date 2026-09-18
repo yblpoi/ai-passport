@@ -33,6 +33,9 @@ WEB = ROOT / "assets/web"
 TEMPLATE = WEB / "admin.html"
 STYLESHEET = WEB / "admin.css"
 SCRIPT = WEB / "admin.js"
+# 头像的像素化内核(纯函数,不碰 DOM)。单独成文件是为了让 tests/test_avatar_slic.mjs
+# 能用 node 直接跑它;这里把它内联进 admin.js,页面上仍然只有一个 /admin.js 请求。
+AVATAR_SLIC = WEB / "avatar_slic.js"
 ASSETS = ROOT / "assets/images/web/assets.json"
 LUNAR_TABLE = ROOT / "assets/images/web/lunar.json"
 TEXT_OUTPUT = ROOT / "main/love_admin_page.h"
@@ -41,6 +44,7 @@ BLOB_OUTPUT = ROOT / "main/love_web_assets.h"
 ICONS_PLACEHOLDER = "__ICONS_JSON__"
 PALETTE_PLACEHOLDER = "__PALETTE_JSON__"
 LUNAR_PLACEHOLDER = "__LUNAR_JSON__"
+SLIC_PLACEHOLDER = "__AVATAR_SLIC_JS__"
 
 # 页面图标(浏览器标签页与 iOS 主屏幕)用哪颗图标,对应 assets.json 里的 id。
 PAGE_ICON_ID = "heart"
@@ -100,8 +104,12 @@ def render_script(script: str, assets: dict) -> str:
     script = script.replace(PALETTE_PLACEHOLDER, json.dumps(palette))
     # 农历表:与设备端同一份数据,预览才不会算出和真机差一天的日子。
     script = script.replace(LUNAR_PLACEHOLDER, LUNAR_TABLE.read_text(encoding="utf-8").strip())
+    # 头像像素化内核:一并内联,页面上就还是"一个 /admin.js 请求"。
+    script = script.replace(SLIC_PLACEHOLDER,
+                            AVATAR_SLIC.read_text(encoding="utf-8").strip())
 
-    for placeholder in (ICONS_PLACEHOLDER, PALETTE_PLACEHOLDER, LUNAR_PLACEHOLDER):
+    for placeholder in (ICONS_PLACEHOLDER, PALETTE_PLACEHOLDER, LUNAR_PLACEHOLDER,
+                        SLIC_PLACEHOLDER):
         if placeholder in script:
             raise ValueError(f"脚本占位符 {placeholder} 未替换")
     return script

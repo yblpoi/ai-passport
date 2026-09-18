@@ -1,7 +1,9 @@
 /* assets/web/admin.css —— 后台网页样式,由设备以 /admin.css 单独返回。
-   底纹 /bg.png 是独立资源,不再以 data URI 内联。 */
+   底纹 /bg.png 是独立资源,不再以 data URI 内联。
+   那张图只有白色爱心、其余透明,粉色来自下面的 background-color —— 设备端同理
+   (style 的 bg_color + 平铺底纹),所以改底色只改这一个颜色值。 */
 :root{
-  --pink:#F1959E; --pink-deep:#EAA5AC; --paper:#F4F4EA; --ink:#17202A;
+  --pink:#F1959E; --paper:#F4F4EA; --ink:#17202A;
   --red:#E43B2F; --yellow:#FFD928; --green:#82BE2D; --muted:#9E9E9E;
   --shadow:#C96F79; --bat-text:#FFE3E6;
 }
@@ -94,6 +96,11 @@ button.ghost{background:#fff}
 .kv b{font-weight:600}
 .scan li{display:flex; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px dashed #bbb; font-size:13px; cursor:pointer}
 .scan li:hover{background:#FFE3E6}
+/* 已保存的网络：不可点(与上面的扫描结果区分开)，右侧只有一个删除按钮。 */
+.saved li{display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed #bbb; font-size:13px}
+.saved li span:first-child{flex:1 1 auto; overflow-wrap:anywhere}
+.saved li .cur{color:var(--red); font-weight:700; flex:0 0 auto}
+.saved li button{padding:3px 8px; font-size:12px; flex:0 0 auto}
 ul{list-style:none; margin:8px 0 0; padding:0}
 .toast{
   position:fixed; left:50%; bottom:22px; transform:translateX(-50%);

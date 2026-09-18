@@ -87,12 +87,14 @@ static const char *TAG = "love_app";
 // 数字独占右列(它才是列表上最该被一眼读到的信息)。
 //
 // 右列最坏情况是 5 位数(24px 数字 60px),右对齐到 x=228,即从 x=168 起;
-// 名字从 x=60 起、留 4px 间隔,所以宽度是 104(4 个汉字多一点,超出裁切)。
+// 名字从 x=60 起、留 4px 间隔,所以宽度是 104 —— 但 104 不是 24px 字格的整数倍
+// (104/24=4.33),CLIP 会把第 5 个字切在笔画中间,留一截悬空的竖/撇,看着像渲染坏了。
+// 取 96 = 正好 4 个字,截断落在字与字之间。
 #define LIST_ROW_TEXT_X   60
 #define LIST_ROW_LINE1_Y  5      // 名字/数字:24px,占 y+5..y+29
 #define LIST_ROW_LINE2_Y  31     // 分类/单位:12px,占 y+31..y+43
 #define LIST_ROW_ICON_DY  3      // 图标 40px,占 y+3..y+43,与两排文字齐平
-#define LIST_ROW_NAME_W   104
+#define LIST_ROW_NAME_W   96
 
 // 分类标签的最大宽度(字节码见 category_width)。下排右侧还有天数单位:
 // 最长的"农历超出范围"在 12px 下是 72px,从 x=156 起,所以标签止于 x=150。

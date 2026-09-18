@@ -81,6 +81,9 @@ let avatarParams = Object.assign({}, ADV_DEFAULTS);
 let previewPx = null;          // 240x240 的工作图（选过照片、或取自现有头像）
 let previewSourceNote = "";    // 预览源是"刚选的照片"还是"设备上已有的头像"
 let previewTimer = 0;
+// 最后一次上传（槽位 + 原始 File）。调完参数要能"再传一次"，否则每改一次参数都得
+// 重新走一遍相册选择（手机上尤其烦）。
+let lastAvatarUpload = null;
 
 function advSyncLabels(){
   byId("advStepVal").textContent = avatarParams.step;
@@ -221,6 +224,9 @@ function setAvatarImg(el, idx){
 
 async function uploadAvatar(slot, file){
   const bytes = await compressAvatar(file, avatarParams);
+  lastAvatarUpload = { slot: slot, file: file };   // 让"用当前参数重新上传"可用
+  const again = byId("advReupload");
+  if (again) again.hidden = false;
   const res = await fetch(`/api/avatar?slot=${slot}`, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
@@ -928,6 +934,14 @@ byId("advStep").oninput = advFromInputs;
 byId("advIters").oninput = advFromInputs;
 byId("advWeight").oninput = advFromInputs;
 byId("advMode").onchange = advFromInputs;
+// 调参的闭环：改滑块 -> 直接重传刚才那张（参数就是滑块当前值）。
+byId("advReupload").onclick = async () => {
+  if (!lastAvatarUpload){ toast("还没选过照片"); return; }
+  try{
+    await uploadAvatar(lastAvatarUpload.slot, lastAvatarUpload.file);
+    toast("已按当前参数重新上传");
+  }catch(e){ toast("重新上传失败：" + e.message); }
+};
 byId("advReset").onclick = () => {
   avatarParams = Object.assign({}, ADV_DEFAULTS);
   byId("avatarStrength").value = DEFAULT_GEAR;

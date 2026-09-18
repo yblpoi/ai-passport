@@ -1383,7 +1383,10 @@ static void on_config_changed(void)
     }
     s_cfg = *next;
     free(next);
-    if (s_view > (int)s_cfg.event_count) s_view = s_cfg.event_count;
+    // **不**按新下标把 s_view 夹到范围内:事件是按下标存的,网页删一条或上移/下移之后,
+    // 同一个下标可能指向另一条事件(夹出来的会是一张"合法但不相干"的卡)。让 render()
+    // 里那条统一的收敛规则(位置越界、或那条已不是"单页")把用户送回主页。
+    // 想在网页改完配置后保住位置,得给事件一个稳定身份再查回来 —— 现在没有,先不做。
     render();
     bsp_lvgl_unlock();
 }

@@ -1,9 +1,10 @@
 // main/love_app.c —— 像素风纪念日摆件的界面与按键逻辑。
 //
 // 视图分两类:**主页**一张,以及"轮播"上的一串**页**(单页事件卡在前、列表屏各页
-// 在后)。上/下键是唯一的翻页方式,越过两端回主页 —— 环的形状与页码的算法都在
-// love_view 里(纯逻辑,有主机测试),这里只负责画出来。
+// 在后)。上/下键是唯一的翻页方式,越过两端回主页(页面上连按两次"上"也一步回主页)——
+// 环的形状与页码的算法都在 love_view 里(纯逻辑,有主机测试),这里只负责画出来。
 // 另有设置页(长按确定键)与本机状态页。
+// 一次物理按键的哪些事件算"动作"由 love_key 裁定(按下不算,熄屏时只亮屏)。
 // 所有 LVGL 访问都在 bsp_lvgl_lock() 内;NVS 落盘、热点开关等慢操作放在锁外。
 #include "love_app.h"
 
@@ -14,6 +15,7 @@
 #include "love_date.h"
 #include "love_event_order.h"
 #include "love_httpd.h"
+#include "love_key.h"
 #include "love_lunar.h"
 #include "love_net.h"
 #include "love_pixel_art.h"
@@ -1429,9 +1431,16 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     action_t action = ACT_NONE;
 
-    // 熄屏状态下,任意键先只负责"亮屏",不再顺带触发该键的动作 ——
-    // 否则用户想看一眼天数,一按就把日期改了。
-    if (s_screen_off) {
+    // 一次物理按键会发好几个事件:按下(PRESS)之后,官方 button 组件才会按"按下多久、
+    // 按了几次"判定出 CLICK / DOUBLE / LONG。**只有判定事件才算用户想做的事**,
+    // 按下瞬间只算"有人动了"(喂住熄屏与深睡计时)。判定规则与实测教训见 love_key.h。
+    switch (love_key_intent(s_screen_off, ev)) {
+    case LOVE_KEY_IGNORE:
+        note_input();
+        return;
+    case LOVE_KEY_WAKE:
+        // 熄屏后第一个判定事件只负责亮屏,不再顺带执行 —— 否则用户想看一眼天数,
+        // 一按就把页面翻走或把设置改了。
         note_input();
         if (bsp_lvgl_lock(400)) {
             screen_wake();
@@ -1441,6 +1450,8 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             s_screen_off = false;
         }
         return;
+    case LOVE_KEY_ACT:
+        break;
     }
     note_input();
 

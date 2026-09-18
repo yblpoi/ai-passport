@@ -34,7 +34,16 @@ Three more rules that are easy to get wrong:
 
 - **The first key press after blank-off only wakes the screen.** It is not delivered as
   a key action, otherwise "glance at the countdown" would also navigate or change a
-  setting. This rule is about a blank-off *within the same run*; a deep-sleep wake is a
+  setting. The rule lives in `main/love_key.h`: one physical press emits several events
+  (PRESS on the way down, then the component's judged event — CLICK, DOUBLE or LONG —
+  after the key is released), and only the judged event counts as "what the user wants
+  to do". PRESS is not an action and does **not** wake the screen either: with PRESS
+  waking, the judged event of the same gesture lands on an already lit screen and runs.
+  That is exactly how this broke on the device — the screen came on *and* changed page —
+  and the console `key` command could not reproduce it, because it injected a single
+  CLICK (it now injects a whole gesture, see
+  [serial-screenshot.md](serial-screenshot.md)).
+  This rule is about a blank-off *within the same run*; a deep-sleep wake is a
   fresh boot, so there is no "was the screen off?" state to consult — see the note under
   "Waking up again".
 - **Blank-off always returns to the home screen**, because the blank-off is usually

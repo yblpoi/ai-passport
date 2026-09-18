@@ -21,8 +21,10 @@
 #define LOVE_ICON_RING 13  // 戒指
 #define LOVE_ICON_LOVING 14  // 爱你
 #define LOVE_ICON_TREE 15  // 圣诞树
+#define LOVE_ICON_FIRECRACKER 16  // 鞭炮
+#define LOVE_ICON_BOUQUET 17  // 花束
 
-#define LOVE_ICON_COUNT 16
+#define LOVE_ICON_COUNT 18
 #define LOVE_ICON_PX 40
 
 // 16 色调色板,顺序即自定义头像的 4bpp 索引顺序。

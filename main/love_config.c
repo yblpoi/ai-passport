@@ -86,7 +86,18 @@ void love_config_sanitize(love_config_t *cfg)
     }
 }
 
-// v2 记录 -> v4:老记录没有分类、没有展示方式与蓝牙开关。分类留空("无分类"),
+// v5 把内置图标从 16 个扩到 18 个(鞭炮 16、花束 17 追加在末尾),自定义头像槽因此
+// 从 16..19 挪到 18..21。**v5 之前的每一版记录**(v2/v3/v4)里,凡是 >= 16 的图标号
+// 都是头像槽,升级时统一 +2;0..15 的内置图标语义没变,原样保留。
+//
+// 16 与 2 在这里是**历史格式的一部分**,不能写成 LOVE_ICON_MAX 之类的当前常量 ——
+// 那样以后再加图标时,这段迁移会跟着漂移,把老记录的编号解释错。
+static uint8_t icon_v4_to_v5(uint8_t icon)
+{
+    return (icon >= 16) ? (uint8_t)(icon + 2) : icon;
+}
+
+// v2 记录 -> v5:老记录没有分类、没有展示方式与蓝牙开关。分类留空("无分类"),
 // 展示方式按"一个事件占一屏"的老行为填单页(升级后看到的屏幕不变),
 // 蓝牙开关保持调用方铺好的默认值。
 static void migrate_v2(const love_config_v2_t *old, love_config_t *out)
@@ -97,7 +108,7 @@ static void migrate_v2(const love_config_v2_t *old, love_config_t *out)
     for (size_t i = 0; i < LOVE_PERSON_MAX; i++) {
         love_utf8_copy(out->people[i].name, sizeof(out->people[i].name),
                        old->people[i].name);
-        out->people[i].icon = old->people[i].icon;
+        out->people[i].icon = icon_v4_to_v5(old->people[i].icon);
     }
 
     uint8_t count = old->event_count;
@@ -107,7 +118,7 @@ static void migrate_v2(const love_config_v2_t *old, love_config_t *out)
     for (size_t i = 0; i < count; i++) {
         love_utf8_copy(out->events[i].name, sizeof(out->events[i].name),
                        old->events[i].name);
-        out->events[i].icon = old->events[i].icon;
+        out->events[i].icon = icon_v4_to_v5(old->events[i].icon);
         out->events[i].kind = old->events[i].kind;
         out->events[i].date = old->events[i].date;
         out->events[i].category[0] = '\0';
@@ -129,7 +140,7 @@ static void migrate_v3(const love_config_v3_t *old, love_config_t *out)
     for (size_t i = 0; i < LOVE_PERSON_MAX; i++) {
         love_utf8_copy(out->people[i].name, sizeof(out->people[i].name),
                        old->people[i].name);
-        out->people[i].icon = old->people[i].icon;
+        out->people[i].icon = icon_v4_to_v5(old->people[i].icon);
     }
 
     uint8_t count = old->event_count;
@@ -144,12 +155,26 @@ static void migrate_v3(const love_config_v3_t *old, love_config_t *out)
     for (size_t i = 0; i < count; i++) {
         love_utf8_copy(out->events[i].name, sizeof(out->events[i].name),
                        old->events[i].name);
-        out->events[i].icon = old->events[i].icon;
+        out->events[i].icon = icon_v4_to_v5(old->events[i].icon);
         out->events[i].kind = old->events[i].kind;
         out->events[i].date = old->events[i].date;
         love_utf8_copy(out->events[i].category, sizeof(out->events[i].category),
                        old->events[i].category);
         out->events[i].view_mode = view;
+    }
+}
+
+// v4 记录 -> v5:两版的结构布局完全相同,差别只在图标的取值范围 —— 见上面的
+// icon_v4_to_v5():把头像槽的编号挪两位,内置图标原样保留。
+static void migrate_v4(const love_config_t *old, love_config_t *out)
+{
+    *out = *old;                     // 两版逐字段布局相同
+
+    for (size_t i = 0; i < LOVE_PERSON_MAX; i++) {
+        out->people[i].icon = icon_v4_to_v5(out->people[i].icon);
+    }
+    for (size_t i = 0; i < LOVE_EVENT_MAX; i++) {
+        out->events[i].icon = icon_v4_to_v5(out->events[i].icon);
     }
 }
 
@@ -165,6 +190,14 @@ bool love_config_from_record(const void *blob, size_t size, love_config_t *out)
         love_config_record_t record;
         memcpy(&record, blob, sizeof(record));
         *out = record.config;
+        return true;
+    }
+
+    // v4 与 v5 的结构布局相同,只有图标的取值范围变了(见 migrate_v4)。
+    if (version == 4u && size == sizeof(love_config_record_t)) {
+        love_config_record_t record;
+        memcpy(&record, blob, sizeof(record));
+        migrate_v4(&record.config, out);
         return true;
     }
 

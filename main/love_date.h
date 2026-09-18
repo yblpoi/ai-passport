@@ -29,8 +29,9 @@
 #define LOVE_EVENT_VIEW_PAGE 1u
 // 主屏底部的两个人。
 #define LOVE_PERSON_MAX 2
-// 内置像素图标数量(love_icons.c)。
-#define LOVE_ICON_MAX 16
+// 内置像素图标数量,与生成的 LOVE_ICON_COUNT 相等(love_app.c 里有静态断言钉住)。
+// 只能往后追加图标:0..LOVE_ICON_MAX-1 这些下标存在用户的配置里。
+#define LOVE_ICON_MAX 18
 // 用户上传的自定义头像槽位数:图标号 LOVE_ICON_MAX .. LOVE_ICON_MAX+LOVE_AVATAR_MAX-1。
 #define LOVE_AVATAR_MAX 4
 // 合法的图标号上界(不含)。内置图标 + 自定义头像。

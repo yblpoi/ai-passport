@@ -104,6 +104,9 @@ EMOJI: list[tuple[str, str, str]] = [
     ("ring", "戒指", "1f48d"),
     ("loving", "爱你", "1f970"),
     ("tree", "圣诞树", "1f384"),
+    # 只能往后追加：下标 0..15 存在用户配置里，语义不能动。
+    ("firecracker", "鞭炮", "1f9e8"),
+    ("bouquet", "花束", "1f490"),
 ]
 
 # 主屏底纹用的爱心（8x8 掩码，放大 2 倍后放进 48x48 平铺砖）。
@@ -173,7 +176,7 @@ def write_png(path: Path, rows: list[list[tuple[int, int, int, int]]]) -> None:
 # —— 以下是 Twemoji 图标路径的纯函数（接线见下一次提交，主机测试已经在用）——
 #
 # 设计要点，都是踩过的坑换来的：
-#  * 只认「8 位索引色、无隔行」这一种 PNG。服务对象是我们自己 vendored 的 16 张素材，
+#  * 只认「8 位索引色、无隔行」这一种 PNG。服务对象是我们自己 vendored 的 18 张素材，
 #    别的格式一律抛错——将来上游换了导出参数时宁可炸掉，也不要悄悄解出错图。
 #  * 降采样用「每格按 alpha 累加投票取主导色」，不是面积平均：平均会造出源图没有的
 #    中间色（16 色索引图上就是脏色），也等于把像素风糊成低分辨率矢量。
@@ -191,7 +194,7 @@ def decode_indexed_png(data: bytes) -> tuple[int, int, list[tuple[int, int, int,
     """解一张调色板索引 PNG，返回 (宽, 高, 调色板[(R,G,B,A)], 索引字节)。
 
     tRNS 短于 PLTE 时，**余下的调色板项是完全不透明的**（PNG 规范如此，Twemoji 的
-    16 张素材全都是短 tRNS）——这是这类解码最常见的坑，主机测试专门钉住它。
+    18 张素材全都是短 tRNS）——这是这类解码最常见的坑，主机测试专门钉住它。
     """
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError("不是 PNG 文件")
@@ -294,7 +297,7 @@ def emoji_bbox(width: int, height: int, palette, indices: bytes,
 def fit_box(box: tuple[int, int, int, int], n: int = EMOJI_PX):
     """把外接框**等比**缩进 n x n 并居中，返回 (x0,y0,w,h,w2,h2,ox,oy)。
 
-    必须等比：16 张素材的外接框从 38x72（气球）到 72x72（蛋糕）都有，逐轴填满会把
+    必须等比：18 张素材的外接框从 38x72（气球）到 72x72（蛋糕）都有，逐轴填满会把
     气球拉宽近一倍。代价是"墨迹占比"仍会差到 27%–81%（气球天生瘦），这是形状差异，
     不是可以靠拉伸抹平的东西。
     """
@@ -356,7 +359,7 @@ def load_emoji_grid(path: Path) -> list[list[tuple[int, int, int] | None]]:
 def per_icon_palette(grid) -> list[tuple[int, int, int, int]]:
     """每张图标一张 16 项调色板：索引 0 恒为透明，其余按「用得多的在前」排
     （并列取 RGB 小的）。用色超过 15 种直接抛错——I4 只有 16 个槽位，静默截断
-    会让图标悄悄丢色。实测 16 张素材最多 8 色（圣诞树），余量充足。
+    会让图标悄悄丢色。实测 18 张素材最多 10 色（月饼），余量充足。
 
     为什么每图一张表而不是全局一张：16 张的用色并集远超 16 种，而 lv_bin_decoder
     对索引格式的约定本就是「调色板在 image->data 开头」，天然支持每图自带。

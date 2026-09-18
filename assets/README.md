@@ -147,7 +147,7 @@ Store reusable source images and generated display assets in `images/`.
 
 ### Commemorative-day pixel art (love_pixel_art)
 
-- Source: `images/emoji/` — sixteen Twemoji graphics, vendored as 72×72 PNGs with
+- Source: `images/emoji/` — eighteen Twemoji graphics, vendored as 72×72 PNGs with
   the CC-BY 4.0 graphics license text (`LICENSE-GRAPHICS.txt`) and a `manifest.json`
   that pins the upstream tag (v16.0.0), the file names, the code points and a sha256
   per file. `images/fetch_emoji.py` fetches them (fixed tag, sha256 verified, exits
@@ -169,22 +169,28 @@ Store reusable source images and generated display assets in `images/`.
   and every revision had to be laid out by hand on the 8×8 grid. The pixel-art
   style now comes from the source art's own shapes, sampled onto a real grid.
 - The icon **order must not change**: `LOVE_ICON_*` indices are stored in the user's
-  configuration, so reordering would silently change their icons. The historical
+  configuration, so reordering would silently change their icons — and adding icons
+  changes the *numbering* every stored configuration was written with.
   Slot 9 keeps the name `LOVE_ICON_MOON` even though the art is now a moon cake - a
   moon cake is still a moon cake. Slot 14 was renamed from `LOVE_ICON_LEAF` to
   `LOVE_ICON_LOVING`: it holds a smiling face with hearts, and a name about leaves
   would only mislead whoever reads the code next. Both are just names - the stored
   configuration holds the slot *index*, so nothing on a user's device changed.
+- **New icons may only be appended.** The set grew from 16 to 18 on 2026-09-18
+  (firecracker 16, bouquet 17) so the calendar defaults could use them. The four
+  custom-avatar slots therefore moved from 16..19 to 18..21, so configuration
+  version 5 shifts any icon number >= 16 by two when reading v4 and older records
+  (`icon_v4_to_v5()` in `main/love_config.c`, covered by a host test).
 - Generated output:
-  - `images/love_pixel_art.c` and `main/love_pixel_art.h`: sixteen 40×40 4 bpp
+  - `images/love_pixel_art.c` and `main/love_pixel_art.h`: eighteen 40×40 4 bpp
     indexed (I4) icons (the 20×20 grid scaled 2×), a 48×48 RGB565 heart background
     tile, and `love_pixel_palette[16]`.
-  - Each icon carries **its own** 16-colour palette: the union of the sixteen
+  - Each icon carries **its own** 16-colour palette: the union of the eighteen
     graphics' colours is far past sixteen entries, and the `lv_bin_decoder`
     convention already puts the palette at the head of each image's data. An icon
     that ever needs more than 15 opaque colours fails the generator loudly in
     `per_icon_palette()` rather than losing colours silently; the busiest of the
-    sixteen (the tree) uses 8.
+    eighteen (the moon cake) uses 10.
   - The icons are I4 rather than ARGB8888: a 16-colour palette is embedded at the
     head of each icon's data (as `lv_color32_t`, memory order B,G,R,A), followed by
     the indices, two pixels per byte, high nibble first. That is the
@@ -210,7 +216,7 @@ Store reusable source images and generated display assets in `images/`.
   A **circular** chip is still rejected for the same reason: the built-in icons are
   shapes, not tiles, and a circle would clip whichever of them reaches the edge.
   **Why the built-in icons are not rounded:** they are *shapes* on a transparent
-  background, not square photos. Measured on the sixteen generated grids, only the
+  background, not square photos. Measured on the eighteen generated grids, only the
   cat's two top corners touch the canvas edge at all; a 4 px radius would nick
   those and leave the rest untouched, so the rule would apply inconsistently to
   exactly the one icon that needs its corners. For a shape the choice is only
@@ -233,7 +239,7 @@ Store reusable source images and generated display assets in `images/`.
   icon, served by `/bg.png` and by `/favicon.ico` and `/apple-touch-icon*.png`) and
   `main/love_admin_page.h` (HTML/CSS/JS, served as `/`, `/admin.css` and `/admin.js`).
 - The web icons are **inlined into `admin.js`** as data URIs rather than served as
-  `/icon/N.png`: all sixteen are 3,949 bytes as PNGs (5,644 bytes as data URIs),
+  `/icon/N.png`: all eighteen are 4,519 bytes as PNGs (6,452 bytes as data URIs),
   and splitting them into separate requests makes a single page load open a dozen
   extra connections, squeezing the device heap until the Wi-Fi driver cannot
   allocate a transmit frame. The 167 KB pixel font, not the icons, was what made
@@ -243,8 +249,8 @@ Store reusable source images and generated display assets in `images/`.
   remain under **CC-BY 4.0** — see `images/emoji/LICENSE-GRAPHICS.txt` for the full
   text, which must stay with the art. The heart background tile is original artwork
   for this repository and uses the repository license.
-- Cost: about 112 KB of source and 18 KB of Flash for icons, tile and palette
-  (13.8 KB icons — sixteen 864-byte I4 images — plus a 4.6 KB tile); I4 icons are
+- Cost: about 123 KB of source and 20 KB of Flash for icons, tile and palette
+  (15.2 KB icons — eighteen 864-byte I4 images — plus a 4.6 KB tile); I4 icons are
   converted row by row while drawing and are never cached as a full screen.
 
 ### Lunar calendar table (love_lunar_table)

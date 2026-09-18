@@ -80,6 +80,16 @@
       "id": "tree",
       "label": "圣诞树",
       "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAA40lEQVR42u3YsQ3CMBAFUO9ATUFLQUOJREUJG1AzABvQ0bIEFaPQUTPLoUT6BSd+Yks2Ojt30i+iRMlLzrashJCp5LGWLsFqmQUCpuNABzrQOvB420hMHMhqf1lKl+153gcgHOO8A8daK89DHzOtrhaoW+1AVoDoAPJe7X7GgbELM4MWb3U1wPvr+hXWcjYEpgvEgzSQtZhBpwdMnRws+sUcyFrJNg9saLQP1AsuG/yA6c1D8cliFogbjQFTl5lsULPAXMtKatoBMii77rSYyVBiP0B7wNhKBf69qgWa+T9YGvgB8JrxkehRXeMAAAAASUVORK5CYII="
+    },
+    {
+      "id": "firecracker",
+      "label": "鞭炮",
+      "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAA3ElEQVR42u3YMQoCMRCF4ZzIU9iKrR7BQo9g453stfYCFvayV7CIbMgEHQlxETK/MAOv/5jNTMKGYFzxfoyvCbTCAgvqsngPBcoHXg9xzHmzTHHgZGAGOfDXEmCgljnwNpvHMcN6l4LrHBYoh15gEgFjphQHLOsiL+LHaZ8iMAd+OwwCFLAGdodigRqmh+HjOZVj1jkMsAXTwXXODDgVZj6tGKB3rjfMga3nkvmZwwLLYpXLPgc3rThgbRj0Je/AWg2rbUypDEMN2u3s4YH6U2PedX8HbEExf50owCesQGxhWM6jxwAAAABJRU5ErkJggg=="
+    },
+    {
+      "id": "bouquet",
+      "label": "花束",
+      "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAA7ElEQVR42u3YsQ3CMBAFUA/ACszABlS0lBQsQUHDHKzCHKyQBeipjbB0EvrS6c5OIn9sW/pVLOXFZ1+UhLDw2F+38ZvAOmiBAovPY4p2vdoD0ALxxgKU4PX+gK/zJf5m2h1StNJqed83Kf0AEaZBB7AUiFALiIdmACXeEvcH9EKtRq017HaB2qsJQbfHKcU6PDKvfaBVImm02HC9bQih7QC9m1wDe9tRcanpgTi8QEkucPZepAfmltpqN/0Acw8LzkeAN6ud5urAuVkcSg9c60PeCx5AL5wW+ncraYGrryQtMLf0A1gKpf0Jj8APvj+fYmxnjjYAAAAASUVORK5CYII="
     }
   ],
   "palette": [

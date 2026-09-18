@@ -30,7 +30,7 @@ GEN = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = GEN
 SPEC.loader.exec_module(GEN)
 
-# 16 张素材裁边、等比降到 20 逻辑像素后的实测结果（长边恒 20、居中）。
+# 18 张素材裁边、等比降到 20 逻辑像素后的实测结果（长边恒 20、居中）。
 # 气球 11x20、圣诞树 15x20 是形状本来的样子——**不许改成逐轴填满**（那是拉伸）。
 FIT_EXPECTED = {
     "bird": (20, 18, 0, 1),
@@ -49,6 +49,8 @@ FIT_EXPECTED = {
     "ring": (13, 20, 3, 0),
     "loving": (20, 20, 0, 0),
     "tree": (15, 20, 2, 0),
+    "firecracker": (18, 20, 1, 0),
+    "bouquet": (20, 20, 0, 0),
 }
 
 # 自定义头像的 4bpp 索引色序：存在 NVS 里的头像数据就是按这个顺序索引的，
@@ -161,7 +163,7 @@ class DecodeIndexedPngTest(unittest.TestCase):
             self.assertEqual(list(indices), [v for row in rows for v in row])
 
     def test_trns_shorter_than_plte_leaves_the_rest_opaque(self):
-        """tRNS 短于 PLTE 时余项是完全不透明的（16 张素材全是短 tRNS）。"""
+        """tRNS 短于 PLTE 时余项是完全不透明的（18 张素材全是短 tRNS）。"""
         palette = [(1, 2, 3, 255), (4, 5, 6, 0), (7, 8, 9, 255)]
         data = encode_indexed_png(2, 1, palette, [[0, 1]])
         _w, _h, pal, _idx = GEN.decode_indexed_png(data)
@@ -290,7 +292,7 @@ class IconInvariantsTest(unittest.TestCase):
         for index, (name, _label, _code) in enumerate(GEN.EMOJI):
             self.assertRegex(header, rf"#define LOVE_ICON_{name.upper()} {index}\b",
                              "图标顺序是用户配置里存的图标号，改序 = 换掉用户的图标")
-        self.assertRegex(header, r"#define LOVE_ICON_COUNT 16\b")
+        self.assertRegex(header, rf"#define LOVE_ICON_COUNT {len(GEN.EMOJI)}\b")
         self.assertRegex(header, r"#define LOVE_ICON_PX 40\b")
 
     def test_source_list_matches_the_fetch_manifest(self):

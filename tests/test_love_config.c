@@ -42,7 +42,7 @@ static void seed_defaults(love_config_t *cfg)
     cfg->blank_off_seconds = LOVE_BLANK_OFF_DEFAULT;
 }
 
-static void test_migrate_v2_to_v4(void)
+static void test_migrate_v2_to_current(void)
 {
     love_config_v2_record_t old;
     memset(&old, 0, sizeof(old));
@@ -50,7 +50,7 @@ static void test_migrate_v2_to_v4(void)
     old.config.start = (love_date_t){ 2025, 3, 14 };
     old.config.blank_off_seconds = 180;
     strcpy(old.config.people[0].name, "咕咕");
-    old.config.people[0].icon = 17;      // 自定义头像槽位
+    old.config.people[0].icon = 17;      // 自定义头像槽位(v2 时代 16..19)
     strcpy(old.config.people[1].name, "嘎嘎");
     old.config.people[1].icon = 3;
     old.config.event_count = 3;
@@ -75,7 +75,7 @@ static void test_migrate_v2_to_v4(void)
     assert(now.start.year == 2025 && now.start.month == 3 && now.start.day == 14);
     assert(now.blank_off_seconds == 180);
     assert(strcmp(now.people[0].name, "咕咕") == 0);
-    assert(now.people[0].icon == 17);
+    assert(now.people[0].icon == 19);    // 头像槽 1:v2 的 17 挪到 v5 的 19
     assert(strcmp(now.people[1].name, "嘎嘎") == 0);
     assert(now.people[1].icon == 3);
     assert(now.event_count == 3);
@@ -99,9 +99,9 @@ static void test_migrate_v2_to_v4(void)
     assert(now.events[LOVE_EVENT_MAX - 1].name[0] == '\0');
 }
 
-// v3 → v4:字段基本一一对应,唯一要小心的是 v3 的**全局**展示模式要摊到每条事件上
+// v3 -> 当前:字段基本一一对应,唯一要小心的是 v3 的**全局**展示模式要摊到每条事件上
 // (v4 起是每条自己带),否则升级后用户看到的屏会突然从列表变成单页。
-static void test_migrate_v3_to_v4(void)
+static void test_migrate_v3_to_current(void)
 {
     love_config_v3_record_t record;
     memset(&record, 0, sizeof(record));
@@ -110,7 +110,7 @@ static void test_migrate_v3_to_v4(void)
     record.config.blank_off_seconds = 60;
     record.config.event_count = 2;
     strcpy(record.config.people[0].name, "咕咕");
-    record.config.people[0].icon = 17;
+    record.config.people[0].icon = 17;   // 自定义头像槽位(v3 时代 16..19)
     strcpy(record.config.events[0].name, "在一起");
     strcpy(record.config.events[0].category, "纪念日");
     record.config.events[0].icon = 6;
@@ -131,7 +131,7 @@ static void test_migrate_v3_to_v4(void)
     assert(now.blank_off_seconds == 60);
     assert(now.ble_enabled == 1);
     assert(now.event_count == 2);
-    assert(strcmp(now.people[0].name, "咕咕") == 0 && now.people[0].icon == 17);
+    assert(strcmp(now.people[0].name, "咕咕") == 0 && now.people[0].icon == 19);
     assert(strcmp(now.events[0].name, "在一起") == 0);
     assert(strcmp(now.events[0].category, "纪念日") == 0);
     assert(now.events[0].icon == 6 && now.events[0].kind == 0);
@@ -160,8 +160,36 @@ static void test_migrate_v3_single_page_stays_single(void)
     assert(now.events[0].view_mode == LOVE_EVENT_VIEW_PAGE);
 }
 
-// v4 自己:原样读回,包括每条事件的展示方式。
-static void test_v4_record_round_trip(void)
+// v4 -> v5:内置图标 16 -> 18(鞭炮、花束追加在末尾),自定义头像槽从 16..19 挪到 18..21。
+// 这是唯一一次"图标号的语义变了"的迁移,错了会让已上传的头像显示成鞭炮或花束。
+static void test_migrate_v4_to_v5(void)
+{
+    love_config_record_t record;
+    memset(&record, 0, sizeof(record));
+    record.version = 4u;                 // 老版本号写死:这是历史格式的一部分
+    record.config.start = (love_date_t){ 2000, 1, 1 };
+    record.config.event_count = 2;
+
+    record.config.people[0].icon = 15;   // 老内置图标的最后一个:不动
+    record.config.people[1].icon = 16;   // v4 的头像槽 0 -> v5 的槽 0(18)
+    record.config.events[0].icon = 19;   // v4 的头像槽 3 -> v5 的槽 3(21)
+    record.config.events[1].icon = 0;    // 老内置图标:不动
+
+    love_config_t now;
+    seed_defaults(&now);
+    assert(love_config_from_record(&record, sizeof(record), &now) == true);
+    assert(now.people[0].icon == 15);
+    assert(now.people[1].icon == 18);
+    assert(now.events[0].icon == 21);
+    assert(now.events[1].icon == 0);
+
+    // 迁移结果必须是当前认得的编号,否则 sanitize 会把它清零、头像就没了。
+    love_config_sanitize(&now);
+    assert(now.people[1].icon == 18 && now.events[0].icon == 21);
+}
+
+// 当前版本自己:原样读回,包括每条事件的展示方式。
+static void test_current_record_round_trip(void)
 {
     love_config_record_t record;
     memset(&record, 0, sizeof(record));
@@ -304,10 +332,11 @@ static void test_sanitize_clamps_everything(void)
 
 int main(void)
 {
-    test_migrate_v2_to_v4();
-    test_migrate_v3_to_v4();
+    test_migrate_v2_to_current();
+    test_migrate_v3_to_current();
     test_migrate_v3_single_page_stays_single();
-    test_v4_record_round_trip();
+    test_migrate_v4_to_v5();
+    test_current_record_round_trip();
     test_unknown_records_rejected();
     test_utf8_copy_truncates_on_boundary();
     test_sanitize_clamps_everything();

@@ -102,6 +102,18 @@
       "code": "U+1F384",
       "name": "tree",
       "sha256": "eb29ddb93eefdea899ba9216dd5541ada796a647ff339c891f620046d7cd1440"
+    },
+    {
+      "file": "1f9e8.png",
+      "code": "U+1F9E8",
+      "name": "firecracker",
+      "sha256": "f27c80774c4d44679a4646aea7fc6e16d2bcfc7e37ea2381822291b1bbd8db6a"
+    },
+    {
+      "file": "1f490.png",
+      "code": "U+1F490",
+      "name": "bouquet",
+      "sha256": "fc9b3b4bfe7bbfef7c0e38e119cdd091ab2adc572a4117e3f7c94b8eb087ff5b"
     }
   ]
 }

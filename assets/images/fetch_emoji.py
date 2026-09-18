@@ -50,6 +50,10 @@ EMOJI: list[tuple[str, str, str]] = [
     ("1f48d", "ring", "U+1F48D"),
     ("1f970", "loving", "U+1F970"),
     ("1f384", "tree", "U+1F384"),
+    # 2026-09-18 追加的两个：日历上要用鞭炮与花束，所以图标集从 16 个扩到 18 个。
+    # **只能往后追加**：下标 0..15 的语义不能动，用户的配置里存着它们。
+    ("1f9e8", "firecracker", "U+1F9E8"),
+    ("1f490", "bouquet", "U+1F490"),
 ]
 
 LICENSE_FILE = "LICENSE-GRAPHICS.txt"
@@ -110,14 +114,17 @@ def main() -> None:
         else:
             data = fetch(f"{BASE_URL}/{file_name}")
         digest = sha256(data)
-        if known:
-            verify(DEST / file_name, data, known[file_name], file_name)
+        expected = known.get(file_name)
+        if expected is not None:
+            verify(DEST / file_name, data, expected, file_name)
         if not args.check:
             (DEST / file_name).write_bytes(data)
         entries.append({"file": file_name, "code": codepoint, "name": name, "sha256": digest})
         print(f"{file_name}  {len(data):5d} B  {digest[:16]}…")
 
-    if not manifest:
+    if not args.check:
+        # 每次都重写：素材是加是删，清单都要跟着变（已知文件的 sha256 上面已经校验过，
+        # 所以这里重写不等于放松校验——它是"登记当前集合"）。
         MANIFEST.write_text(json.dumps({
             "source": "Twemoji",
             "repository": REPOSITORY,
@@ -131,6 +138,10 @@ def main() -> None:
         print(f"登记 {MANIFEST.relative_to(ROOT)}")
     else:
         print(f"校验通过：{DEST.relative_to(ROOT)} 与 manifest.json 一致")
+
+    stale = sorted(set(known) - {entry["file"] for entry in entries})
+    if stale:
+        print(f"清单里已不再引用，可从 {DEST.relative_to(ROOT)} 删掉：{', '.join(stale)}")
 
 
 if __name__ == "__main__":

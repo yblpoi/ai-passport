@@ -46,7 +46,7 @@ typedef struct {
     uint8_t ble_enabled;                      // 0 = 关(出厂默认)
 } love_config_t;
 
-#define LOVE_CONFIG_VERSION 4u
+#define LOVE_CONFIG_VERSION 5u
 
 // 落盘记录:版本号 + 配置。版本号是首字段,任何版本都能先把它读出来再决定怎么解释其余字节。
 typedef struct {

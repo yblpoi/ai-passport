@@ -189,6 +189,7 @@ static volatile bool s_render_request;
 
 static void render(void);
 static void set_note(const char *text);
+static void set_note_and_render(const char *text);
 
 
 /* ---------- 小工具 ---------- */
@@ -306,10 +307,12 @@ static void build_battery(lv_obj_t *parent)
 
 
 // 主屏/事件卡共用的“大数字”排版。36px 像素数字每字 18px 宽，10 位数也放得下。
-static void add_big_number(lv_obj_t *parent, int32_t value, bool holds, int y)
+// 收字符串而不是数值:卡片那条路的天数已经由 countdown_text() 写成 "--" 或数字,
+// 再转一次数值只会多出第二处"什么时候该写 --"的判断。
+static void add_big_number(const char *text, int y)
 {
-    s_big = ui_pixel_label(parent, "", &love_font_36, COL_WHITE);
-    lv_label_set_text_fmt(s_big, holds ? "%d" : "--", (int)value);
+    s_big = ui_pixel_label(s_scr, "", &love_font_36, COL_WHITE);
+    lv_label_set_text(s_big, text);
     lv_obj_align(s_big, LV_ALIGN_TOP_MID, 0, y);
 }
 
@@ -507,17 +510,11 @@ static void screen_off(void)
 // 还要回调进来刷新界面,在持锁的任务上做不安全。
 static void blank_off_poll(void)
 {
-    // 调试模式:不熄屏也不深睡(用户明确要求"主动关掉这个模式"之前一直这样)。
-    // USB 一连上就是调试场景,而深睡会把 USB 一起断掉,所以这条闸门必须在最前面。
-    if (s_debug_mode) {
-        screen_wake();
-        s_deep_sleep_due = false;
-        return;
-    }
-
-    uint16_t limit = blank_off_seconds();
-    if (limit == 0) {
-        // 常亮 = 明确要求屏幕一直亮着,那也顺带取消掉"该睡了"的举手。
+    const uint16_t limit = blank_off_seconds();
+    // 调试模式与"常亮"档:都不熄屏、也都不举手要睡(用户明确要求一直亮着时,睡觉不该是
+    // 他的意思)。调试那条闸门必须在最前面:USB 一连上就是调试场景,而深睡会把 USB
+    // 一起断掉。两段体本来一模一样,只是入口条件不同。
+    if (s_debug_mode || limit == 0) {
         screen_wake();
         s_deep_sleep_due = false;
         return;
@@ -874,21 +871,22 @@ static void build_page_label(void)
     lv_obj_align(s_page, LV_ALIGN_TOP_LEFT, 12, 8);
 }
 
-// 列表右列的天数文案,拆成两段输出:数字(24px,右列上行)与单位(12px,右列下行)。
-// 拆分的原因见 LIST_ROW_LINE1_Y 上面那段注释 —— 一行放不下两个 24px 文本。
-// 算不出来(没对时 / 农历超表)时数字写 "--",与事件卡的说法一致,不拿 0 冒充
-// "就是今天"。
-static void format_row_days(char *number, size_t number_size, char *unit, size_t unit_size,
-                            const love_event_t *event, love_date_t today, bool holds)
+// 倒计时文案的唯一出处:数字取绝对值,单位按"没对时 / 农历超表 / 天后 / 天前"四选一。
+// 列表行、单页卡首帧、以及单页卡的每秒刷新三处都要这一套,分开写迟早会漂移 ——
+// 单位是设备上最显眼的几个字,而且"农历超出范围"这种说法必须与卡片一致,不能一处
+// 写"算不出来"另一处写 0。
+//
+// 没对时时数字写 "--"(不拿 0 冒充"就是今天"),单位用调用方给的说法:主屏与单页卡
+// 写"未同步",列表行不写单位(空串)。
+static void countdown_text(char *number, size_t number_size, char *unit, size_t unit_size,
+                           const love_countdown_t *countdown, bool holds, const char *no_time_unit)
 {
     if (!holds) {
         snprintf(number, number_size, "--");
-        unit[0] = '\0';
+        snprintf(unit, unit_size, "%s", no_time_unit);
         return;
     }
-
-    const love_countdown_t countdown = love_event_countdown(event, today);
-    if (!countdown.resolved) {
+    if (!countdown->resolved) {
         // 农历年份超出数据表:说明白是"算不出来",而不是恰好剩下 0 天。
         snprintf(number, number_size, "--");
         snprintf(unit, unit_size, "农历超出范围");
@@ -896,8 +894,27 @@ static void format_row_days(char *number, size_t number_size, char *unit, size_t
     }
 
     snprintf(number, number_size, "%d",
-             (int)(countdown.days >= 0 ? countdown.days : -countdown.days));
-    snprintf(unit, unit_size, "%s", countdown.upcoming ? "天后" : "天前");
+             (int)(countdown->days >= 0 ? countdown->days : -countdown->days));
+    snprintf(unit, unit_size, "%s", countdown->upcoming ? "天后" : "天前");
+}
+
+// 列表右列的天数文案,拆成两段输出:数字(24px,右列上行)与单位(12px,右列下行)。
+// 拆分的原因见 LIST_ROW_LINE1_Y 上面那段注释 —— 一行放不下两个 24px 文本。
+//
+// “算不出来”的三种情形(没对时 / 农历超表)统一由 countdown_text 负责,见它的说明。
+// 列表行不给单位(没对时时单位留空),所以那一路的文案传空串。
+static void format_row_days(char *number, size_t number_size, char *unit, size_t unit_size,
+                            const love_event_t *event, love_date_t today, bool holds)
+{
+    if (!holds) {
+        // 没对时的时候连农历都不必算。
+        snprintf(number, number_size, "--");
+        unit[0] = '\0';
+        return;
+    }
+
+    const love_countdown_t countdown = love_event_countdown(event, today);
+    countdown_text(number, number_size, unit, unit_size, &countdown, true, "");
 }
 
 // 分类标签底块的宽度:一个汉字 12px、一个 ASCII 字符 6px,再加左右各 3px 内边距。
@@ -953,11 +970,30 @@ static void handle_page_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     // 没有光标,所以两处都不做事。
 }
 
+// 每一屏的收尾都一样:底部提示行 + 加载这一屏。提示文案各不相同,位置与加载是同一套
+// 坐标,所以只把尾巴收成一处 —— 以后改版式(提示行高度、对齐)不必再逐屏改一遍。
+static void finish_with_hint(const char *hint)
+{
+    lv_obj_t *label = cjk_small(s_scr, hint, COL_WHITE);
+    lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_screen_load(s_scr);
+}
+
+// 设置页那 9 行的文字缓冲。**故意不放栈上**:每行 4 + 65 = 72 字节(值最长的是热点密码/
+// SSID),9 行共 648 字节;而 render() 会被 4KB 栈的串口控制台任务走到(控制台敲 `ble on`
+// → love_app_set_ble → render),本文件实测那条路只剩两三百字节余量(见 s_render_request
+// 的说明)。代价是 .bss +648 字节。
+//
+// 真机实测(同一块板、同一条 `key long` → `ble on` → `status` 路径,对比"数组放栈上"的
+// 变体固件):render() 栈帧 1056 → 768 字节,控制台任务余量 1088 → 1456 字节。也就是说
+// 换来的栈余量比数组本身小 —— 编译器在静态版本里本来就会为那几行另留一部分帧空间。
+// render() 的每个调用点都在 LVGL 锁内,所以这块静态缓冲不会被并发改写。
+static setting_row_t s_setting_rows[SETTINGS_ROWS];
+
 static void render(void)
 {
     // 这几行文字/图标都是"建好即用",不进 refresh_dynamic,所以做成局部变量。
     lv_obj_t *date_obj;
-    lv_obj_t *hint_obj;
     lv_obj_t *name_obj;
     lv_obj_t *icon_obj;
 
@@ -1014,15 +1050,12 @@ static void render(void)
         lv_obj_set_style_text_align(what, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(what, LV_ALIGN_CENTER, 0, 0);
 
-        hint_obj = cjk_small(s_scr, "确定 允许 · 长按确定 拒绝", COL_WHITE);
-        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
-        lv_screen_load(s_scr);
+        finish_with_hint("确定 允许 · 长按确定 拒绝");
         return;
     }
 
     if (s_view == VIEW_SETTINGS) {
-        setting_row_t rows[SETTINGS_ROWS];
-        int count = build_settings(rows);
+        int count = build_settings(s_setting_rows);
         if (s_sel >= count) s_sel = count - 1;
         if (s_sel < 0) s_sel = 0;
 
@@ -1035,27 +1068,23 @@ static void render(void)
             int y = 72 + i * 24;
             bool selected = i == s_sel;
             if (selected) ui_pixel_block(s_scr, 10, y - 4, 220, 22, COL_WHITE);
-            lv_obj_t *label = cjk_small(s_scr, rows[i].label,
+            lv_obj_t *label = cjk_small(s_scr, s_setting_rows[i].label,
                                         selected ? COL_INK : COL_WHITE);
             lv_obj_align(label, LV_ALIGN_TOP_LEFT, 16, y);
-            lv_obj_t *value = cjk_small(s_scr, rows[i].value,
+            lv_obj_t *value = cjk_small(s_scr, s_setting_rows[i].value,
                                         selected ? COL_INK : COL_WHITE);
             lv_obj_align(value, LV_ALIGN_TOP_RIGHT, -16, y);
         }
 
         // 提示行与主屏/事件卡一致用 12px;这里原先误用了 24px 的 cjk_label,
         // 既是其它屏的两倍大,整行也几乎铺满 240px 屏宽。
-        hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 执行", COL_WHITE);
-        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
-        lv_screen_load(s_scr);
+        finish_with_hint("上/下 选择 · 确定 执行");
         return;
     }
 
     if (s_view == VIEW_STATUS) {
         build_status_page();
-        hint_obj = cjk_small(s_scr, "上/下 选择 · 确定 执行 · 长按返回", COL_WHITE);
-        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
-        lv_screen_load(s_scr);
+        finish_with_hint("上/下 选择 · 确定 执行 · 长按返回");
         return;
     }
 
@@ -1112,9 +1141,7 @@ static void render(void)
                 }
             }
 
-            hint_obj = cjk_small(s_scr, "上/下 翻页 · 长按确定 设置", COL_WHITE);
-            lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
-            lv_screen_load(s_scr);
+            finish_with_hint("上/下 翻页 · 长按确定 设置");
             return;
         }
     }
@@ -1149,7 +1176,9 @@ static void render(void)
         int32_t days = 0;
         bool stale = false;
         bool have_days = main_days(&days, &stale);
-        add_big_number(s_scr, days, have_days, 180);
+        char number[16];
+        snprintf(number, sizeof(number), have_days ? "%d" : "--", (int)days);
+        add_big_number(number, 180);
 
         // 大数字下方是单位。实时的写「天」,用断电快照的写「天(未对时)」,
         // 完全没有可用值时写「未同步」—— 不拿旧数据冒充实时天数。
@@ -1170,9 +1199,7 @@ static void render(void)
                                                    : "长按确定 设置";
         // 调试模式开着时把提示换掉:这一屏可能整晚亮着,得让人一眼看出是"故意不睡的"。
         if (s_debug_mode) main_hint = "调试模式 · 不熄屏不深睡";
-        hint_obj = cjk_small(s_scr, main_hint, COL_WHITE);
-        lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
-        lv_screen_load(s_scr);
+        finish_with_hint(main_hint);
         return;
     }
 
@@ -1206,13 +1233,11 @@ static void render(void)
     // 农历表覆盖不到的年份:说清楚"算不出来",不给假数字
     const bool unresolved = holds && lunar && !countdown.resolved;
 
-    add_big_number(s_scr, countdown.days >= 0 ? countdown.days : -countdown.days,
-                   holds && !unresolved, 158);
-
-    const char *unit;
-    if (!holds) unit = "未同步";
-    else if (unresolved) unit = "农历超出范围";
-    else unit = countdown.upcoming ? "天后" : "天前";
+    // 大数字与单位同出一处:没对时或农历超表时数字是 "--",不必在这里另写一次判据。
+    char number[24];
+    char unit[24];
+    countdown_text(number, sizeof(number), unit, sizeof(unit), &countdown, holds, "未同步");
+    add_big_number(number, 158);
     s_unit = cjk_small(s_scr, unit, COL_WHITE);
     lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 200);
 
@@ -1222,14 +1247,12 @@ static void render(void)
     lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 222);
 
     // 卡片上不再能改日期(日期一律在后台网页改),所以提示只说怎么走。
-    hint_obj = cjk_small(s_scr, "上/下 翻页 · 长按确定 设置", COL_WHITE);
-    lv_obj_align(hint_obj, LV_ALIGN_BOTTOM_MID, 0, -6);
-
+    // 上一行提示(-28)与底部提示行(-6)不重叠,谁先画都不影响观感。
     if (s_note[0]) {
         lv_obj_t *note = cjk_small(s_scr, s_note, COL_WHITE);
         lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -28);
     }
-    lv_screen_load(s_scr);
+    finish_with_hint("上/下 翻页 · 长按确定 设置");
 }
 
 /* ---------- 定时刷新 ---------- */
@@ -1252,17 +1275,15 @@ static void refresh_dynamic(void)
         const love_event_t *event = &s_cfg.events[card];
         love_date_t today;
         if (time_today(&today)) {
-            love_countdown_t countdown = love_event_countdown(event, today);
-            if (!countdown.resolved) {
-                // 农历年份超出数据表:数字置回占位符,别显示上次算出来的旧值
-                lv_label_set_text(s_big, "--");
-                if (s_unit) lv_label_set_text(s_unit, "农历超出范围");
-            } else {
-                lv_label_set_text_fmt(s_big, "%d",
-                                      (int)(countdown.days >= 0 ? countdown.days
-                                                                : -countdown.days));
-                if (s_unit) lv_label_set_text(s_unit, countdown.upcoming ? "天后" : "天前");
-            }
+            // 这里一定 holds(上面刚拿到时间),与 render() 用同一个文案出处 ——
+            // 尤其"农历超出范围"必须能把上次算出来的旧数字换掉。
+            const love_countdown_t countdown = love_event_countdown(event, today);
+            char number[24];
+            char unit[24];
+            countdown_text(number, sizeof(number), unit, sizeof(unit), &countdown, true,
+                           "未同步");
+            lv_label_set_text(s_big, number);
+            if (s_unit) lv_label_set_text(s_unit, unit);
         }
     } else if (s_view == VIEW_MAIN && s_big) {
         love_date_t today;
@@ -1369,11 +1390,7 @@ esp_err_t love_app_set_ble(bool on)
 static void on_ble_shutdown(void)
 {
     const esp_err_t err = love_app_set_ble(false);
-    if (bsp_lvgl_lock(300)) {
-        set_note(err == ESP_OK ? "蓝牙已自动关闭" : "蓝牙关闭失败");
-        render();
-        bsp_lvgl_unlock();
-    }
+    set_note_and_render(err == ESP_OK ? "蓝牙已自动关闭" : "蓝牙关闭失败");
 }
 
 static void on_config_changed(void)
@@ -1423,6 +1440,16 @@ static void set_note(const char *text)
 {
     snprintf(s_note, sizeof(s_note), "%s", text ? text : "");
     s_note_ttl = 4;
+}
+
+// "设一条提示再整屏重绘"在慢操作分支里出现五次,锁纪律完全一样(按键路径上提示是给用户
+// 看的,拿不到锁就什么都不做)。收在一处之后,新增一条提示不会再漏掉锁或漏掉 render。
+static void set_note_and_render(const char *text)
+{
+    if (!bsp_lvgl_lock(300)) return;
+    set_note(text);
+    render();
+    bsp_lvgl_unlock();
 }
 
 /* ---------- 按键 ---------- */
@@ -1511,14 +1538,11 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         love_net_status_t net;
         love_net_get_status(&net);
         esp_err_t err = net.ap_active ? love_net_ap_stop() : love_net_ap_start();
-        if (bsp_lvgl_lock(300)) {
-            // 关掉之后就不再自动开(见 love_net.h),这一点必须写在提示里 ——
-            // 否则用户会一直等它自己回来,而它不会了。
-            set_note(err == ESP_OK ? (net.ap_active ? "热点已关闭(不再自动开)" : "热点已打开")
-                                   : "热点操作失败");
-            render();
-            bsp_lvgl_unlock();
-        }
+        // 关掉之后就不再自动开(见 love_net.h),这一点必须写在提示里 ——
+        // 否则用户会一直等它自己回来,而它不会了。
+        set_note_and_render(err == ESP_OK ? (net.ap_active ? "热点已关闭(不再自动开)"
+                                                          : "热点已打开")
+                                          : "热点操作失败");
         break;
     }
     case ACT_BLE_TOGGLE: {
@@ -1533,12 +1557,8 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 
         const bool want = !open_now;
         const esp_err_t err = love_app_set_ble(want);
-        if (bsp_lvgl_lock(300)) {
-            set_note(err == ESP_OK ? (want ? "蓝牙已打开" : "蓝牙已关闭")
-                                   : "蓝牙操作失败");
-            render();
-            bsp_lvgl_unlock();
-        }
+        set_note_and_render(err == ESP_OK ? (want ? "蓝牙已打开" : "蓝牙已关闭")
+                                          : "蓝牙操作失败");
         break;
     }
     case ACT_SYNC: {
@@ -1546,15 +1566,9 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         love_net_get_status(&net);
         if (net.state == LOVE_NET_CONNECTED) {
             love_time_sntp_start();
-            if (bsp_lvgl_lock(300)) {
-                set_note("正在网络对时…");
-                render();
-                bsp_lvgl_unlock();
-            }
-        } else if (bsp_lvgl_lock(300)) {
-            set_note("请先在后台配置 Wi-Fi");
-            render();
-            bsp_lvgl_unlock();
+            set_note_and_render("正在网络对时…");
+        } else {
+            set_note_and_render("请先在后台配置 Wi-Fi");
         }
         break;
     }
@@ -1857,7 +1871,8 @@ void love_app_enter(void)
 {
     s_font_12 = love_font_12;
     s_font_24 = love_font_24;
-    // 像素字体只覆盖 GB2312 一级字,缺的字与 LVGL 图标回落到 Montserrat。
+    // 像素字体覆盖 GB2312 一级 + 二级字与外加的十个人名用字(见 assets/README 的
+    // 字库说明),真正缺的字与 LVGL 图标回落到 Montserrat。
     s_font_12.fallback = &lv_font_montserrat_14;
     s_font_24.fallback = &lv_font_montserrat_20;
 

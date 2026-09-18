@@ -86,6 +86,32 @@ static bool require_usb(love_console_src_t src, const char *what)
     return false;
 }
 
+// ap / ble / debug 三条命令的第三段参数都是同一套 on|off:同一个判据、同一个失败分支。
+// 只有用法文案不同,所以由调用方把各自那句原文传进来(用户看到的输出一字不改)。
+static bool parse_on_off(const char *arg, const char *usage, bool *on)
+{
+    if (strcmp(arg, "on") == 0) {
+        *on = true;
+        return true;
+    }
+    if (strcmp(arg, "off") == 0) {
+        *on = false;
+        return true;
+    }
+    love_console_out("%s", usage);
+    return false;
+}
+
+// 取一次时间;已同步时把它写成一行描述。state 总会被填好(调用方在未同步时还要看
+// wifi_pending 与 holds),返回值就是"时间到底同步了没有"。
+static bool describe_time(love_time_state_t *state, char *out, size_t size)
+{
+    love_time_get(state);
+    if (!state->holds) return false;
+    love_time_describe(state, out, size);
+    return true;
+}
+
 /* ---------- 命令实现 ---------- */
 
 static void print_wifi_status(void)
@@ -130,14 +156,7 @@ static int cmd_ap(void *ctx, int argc, char **argv)
     }
 
     bool on;
-    if (strcmp(argv[1], "on") == 0) {
-        on = true;
-    } else if (strcmp(argv[1], "off") == 0) {
-        on = false;
-    } else {
-        love_console_out("用法: ap / ap on / ap off\n");
-        return 1;
-    }
+    if (!parse_on_off(argv[1], "用法: ap / ap on / ap off\n", &on)) return 1;
 
     // 关热点会把局域网与热点两条入口一起关掉(手动关还会写进 NVS,重启也不再自动开),
     // 有必要让主人按一下。开热点不拦:密码是每台随机的,开了也进不去。
@@ -219,14 +238,7 @@ static int cmd_ble(void *ctx, int argc, char **argv)
     }
 
     bool on;
-    if (strcmp(argv[1], "on") == 0) {
-        on = true;
-    } else if (strcmp(argv[1], "off") == 0) {
-        on = false;
-    } else {
-        love_console_out("用法: ble / ble on / ble off\n");
-        return 1;
-    }
+    if (!parse_on_off(argv[1], "用法: ble / ble on / ble off\n", &on)) return 1;
 
     if (!on && src == LOVE_CONSOLE_SRC_BLE) {
         // 关栈会把这条连接一起断掉,回复根本发不出去。交给 love_ble 的工作任务:
@@ -251,13 +263,11 @@ static int cmd_time(void *ctx, int argc, char **argv)
 
     if (argc == 1) {
         love_time_state_t state;
-        love_time_get(&state);
-        if (!state.holds) {
+        char described[48] = { 0 };
+        if (!describe_time(&state, described, sizeof(described))) {
             love_console_out("时间未同步。\n");
             return 0;
         }
-        char described[48] = { 0 };
-        love_time_describe(&state, described, sizeof(described));
         love_console_out("%s\n", described);
         return 0;
     }
@@ -401,10 +411,8 @@ static int cmd_status(void *ctx, int argc, char **argv)
     (void)argv;
 
     love_time_state_t time_state;
-    love_time_get(&time_state);
-    if (time_state.holds) {
-        char described[48] = { 0 };
-        love_time_describe(&time_state, described, sizeof(described));
+    char described[48] = { 0 };
+    if (describe_time(&time_state, described, sizeof(described))) {
         love_console_out("时间  %s\n", described);
     } else {
         love_console_out("时间  %s\n",
@@ -442,11 +450,12 @@ static int cmd_status(void *ctx, int argc, char **argv)
                      love_ble_connected() ? "已连接(不睡)" : "无连接");
     // 本次是上电、定时唤醒还是按键唤醒。深睡时 USB 断电,启动最早那几行日志主机
     // 常常接不住,所以这个原因只能问接口 —— 验"按键唤醒深睡"就靠它。
-    love_console_out("唤醒  %s\n", power_sleep_wake_text());
+    const char *wake = power_sleep_wake_text();
+    love_console_out("唤醒  %s\n", wake);
     // 本次若是"上电/复位"(比如刚被主机开串口复位过),把上一次深睡的真实原因也报出来,
     // 否则那条信息就永远丢了(见 power_sleep_last_deep_wake_text)。
-    if (strcmp(power_sleep_wake_text(), "上电/复位") == 0 &&
-        power_sleep_last_deep_wake_text() != NULL) {
+    // 判据走接口而不是拿上面那串文案做 strcmp —— 文案是给人看的,改字不该改控制流。
+    if (power_sleep_wake_is_reset() && power_sleep_last_deep_wake_text() != NULL) {
         love_console_out("深睡  上次由 %s 唤醒\n", power_sleep_last_deep_wake_text());
     }
     if (love_app_debug_mode()) {
@@ -490,15 +499,22 @@ static int cmd_key(void *ctx, int argc, char **argv)
 
     bool twice = strcmp(argv[1], "dbl") == 0;
     const char *name = twice ? (argc >= 3 ? argv[2] : NULL) : argv[1];
+    // 名字缺失只有一种来源:`key dbl` 后面没跟键名。它与"键名不认识"打的是同一句用法,
+    // 提前挡掉之后,下面四个分支就不必各自再判一次 NULL。
+    if (!name) {
+        love_console_out("%s", usage);
+        return 1;
+    }
+
     bool long_press = false;
     bsp_btn_t btn;
-    if (name && strcmp(name, "up") == 0) {
+    if (strcmp(name, "up") == 0) {
         btn = BSP_BTN_UP;
-    } else if (name && strcmp(name, "down") == 0) {
+    } else if (strcmp(name, "down") == 0) {
         btn = BSP_BTN_DOWN;
-    } else if (name && strcmp(name, "ok") == 0) {
+    } else if (strcmp(name, "ok") == 0) {
         btn = BSP_BTN_OK;
-    } else if (!twice && name && strcmp(name, "long") == 0) {
+    } else if (!twice && strcmp(name, "long") == 0) {
         btn = BSP_BTN_OK;
         long_press = true;
     } else {
@@ -579,14 +595,7 @@ static int cmd_debug(void *ctx, int argc, char **argv)
     }
 
     bool on;
-    if (strcmp(argv[1], "on") == 0) {
-        on = true;
-    } else if (strcmp(argv[1], "off") == 0) {
-        on = false;
-    } else {
-        love_console_out("用法: debug / debug status / debug on / debug off\n");
-        return 1;
-    }
+    if (!parse_on_off(argv[1], "用法: debug / debug status / debug on / debug off\n", &on)) return 1;
 
     if (on && !require_usb(src_of(ctx), "打开调试模式")) return 1;
 

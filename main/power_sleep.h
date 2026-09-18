@@ -77,6 +77,10 @@ uint32_t power_sleep_deep_count(void);
 // 本次启动是否由深睡眠的 RTC 定时器唤醒。
 bool power_sleep_woke_from_deep(void);
 
+// 本次启动是否只是一次复位/上电(唤醒原因寄存器为 UNDEFINED)。
+// 与 power_sleep_wake_text() 的区别:这里给的是判据,调用方不必去比对那句中文文案。
+bool power_sleep_wake_is_reset(void);
+
 // 本次启动的唤醒原因(中文短文案):"上电/复位""定时唤醒""按键唤醒"等。
 // 深睡时 USB-Serial-JTAG 是断电的,启动最早那几行日志主机常常接不住,所以这个原因
 // 只能靠接口问,而不是靠翻日志 —— 串口 status 会把它打出来。

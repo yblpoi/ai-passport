@@ -203,9 +203,11 @@ static int gatt_access(uint16_t conn_handle, uint16_t attr_handle,
     for (uint16_t i = 0; i < len; i++) {
         if (love_line_feed(&s_line, (char)payload[i])) {
             if (!s_cmd_queue) continue;
-            char line[LOVE_LINE_MAX];
-            memcpy(line, s_line.buf, sizeof(line));
-            if (xQueueSend(s_cmd_queue, line, 0) != pdTRUE) {
+            // xQueueSend 收的是"源地址",条目在它返回前就整条拷进队列了 —— 所以把行
+            // 缓冲直接交出去即可。这条回调整条都在 host 任务上跑,延迟敏感;先在栈上
+            // 抄一份 128 字节的行是纯多余的动作(下一次 love_line_feed 只会在本行入队
+            // 之后才改写缓冲)。
+            if (xQueueSend(s_cmd_queue, s_line.buf, 0) != pdTRUE) {
                 ESP_LOGW(TAG, "命令队列满,丢弃一行");
             }
         }
@@ -495,6 +497,15 @@ esp_err_t love_ble_start(void)
     return ESP_OK;
 }
 
+// 拆栈路上三个失败点的收尾完全一样:放下"正在拆"的旗子、放开状态锁、把错误原样返回。
+// 收在一处是为了"失败也必须放锁"不会在某个分支上被漏掉 —— 漏掉就等于蓝牙再也起不来。
+static esp_err_t stop_failed(esp_err_t err)
+{
+    s_shutting_down = false;
+    end_transition();
+    return err;
+}
+
 esp_err_t love_ble_stop(void)
 {
     if (!s_initialized) return ESP_OK;
@@ -521,9 +532,7 @@ esp_err_t love_ble_stop(void)
         int rc = nimble_port_stop();
         if (rc != 0) {
             ESP_LOGE(TAG, "nimble_port_stop 失败: %d", rc);
-            s_shutting_down = false;
-            end_transition();
-            return ESP_FAIL;
+            return stop_failed(ESP_FAIL);
         }
         s_stop_in_progress = true;
     }
@@ -532,9 +541,7 @@ esp_err_t love_ble_stop(void)
         if (!s_host_stopped ||
             xSemaphoreTake(s_host_stopped, pdMS_TO_TICKS(BLE_STOP_TIMEOUT_MS)) != pdTRUE) {
             ESP_LOGE(TAG, "等待 NimBLE host 停止超时");
-            s_shutting_down = false;
-            end_transition();
-            return ESP_ERR_TIMEOUT;
+            return stop_failed(ESP_ERR_TIMEOUT);
         }
         s_host_done = true;
     }
@@ -542,9 +549,7 @@ esp_err_t love_ble_stop(void)
     esp_err_t err = nimble_port_deinit();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_deinit 失败: %s", esp_err_to_name(err));
-        s_shutting_down = false;
-        end_transition();
-        return err;
+        return stop_failed(err);
     }
 
     if (s_host_stopped) {

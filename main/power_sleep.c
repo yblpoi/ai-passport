@@ -340,6 +340,14 @@ bool power_sleep_woke_from_deep(void)
            esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER;
 }
 
+// 唤醒原因寄存器为 UNDEFINED = 这次不是从任何休眠里醒来的,而是一次上电/复位。
+// 单独给一个判据是因为调用方(串口 status)要**按语义**分支,而不是拿下面那句
+// 中文文案做 strcmp:文案是给人看的,改一个字不该把控制流改掉。
+bool power_sleep_wake_is_reset(void)
+{
+    return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED;
+}
+
 static const char *wake_cause_text(uint32_t cause)
 {
     switch (cause) {

@@ -117,8 +117,10 @@ esp_err_t love_store_init(void)
         return err;
     }
 
-    love_config_t cfg;
-    love_store_load_config(&cfg);   // 首次启动时把默认值落盘,便于后台直接改
+    // 这里**不**预读一次配置:此刻 s_ready 还没置位,love_store_load_config() 会在
+    // 铺完默认值后立刻返回(既不读 NVS 也没有任何落盘),唯一的后果是在栈上摆一份
+    // 1454 字节的配置再整个丢掉 —— 而本函数跑在只有 3584 字节栈的 main 任务上。
+    // 真正需要配置的调用方(love_app)紧接着会自己 load 一份到它的状态里。
     s_ready = true;
     return ESP_OK;
 }
@@ -241,32 +243,76 @@ esp_err_t love_store_clear_wifi(void)
     return err;
 }
 
-esp_err_t love_store_save_ap_off(bool off)
-{
-    if (!s_ready) return ESP_ERR_INVALID_STATE;
+/* ---------- NVS 样板 ---------- */
+// 下面这些接口除键名与记录类型之外完全同形,"开句柄 → 读/写 → 提交 → 关句柄"各抄
+// 一遍的话,迟早会漏掉其中一处(漏 commit 是静默丢数据,漏 close 是漏资源)。
+// 传输缓冲一律由调用方提供,这两层自己不持有任何状态,也就不需要加锁。
 
+static esp_err_t store_set_u8(const char *key, uint8_t value)
+{
     nvs_handle_t handle;
     esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) return err;
 
-    err = nvs_set_u8(handle, KEY_AP_OFF, off ? 1 : 0);
+    err = nvs_set_u8(handle, key, value);
     if (err == ESP_OK) err = nvs_commit(handle);
     nvs_close(handle);
     return err;
+}
+
+// 读一个 u8 键。键不存在(老固件升上来)、写坏,都由调用方按"没写过"处理。
+static bool store_get_u8(const char *key, uint8_t *out)
+{
+    nvs_handle_t handle;
+    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
+
+    uint8_t value = 0;
+    const esp_err_t err = nvs_get_u8(handle, key, &value);
+    nvs_close(handle);
+    if (err != ESP_OK) return false;
+
+    *out = value;
+    return true;
+}
+
+static esp_err_t store_set_blob(const char *key, const void *data, size_t size)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_blob(handle, key, data, size);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    return err;
+}
+
+// 读一个 blob。长度与预期不符就整体判为无效:每条记录都带版本号,而长度同样是契约的
+// 一部分(短读或降级固件写进来的残片都不该被当成本版本的记录解释)。
+static bool store_get_blob(const char *key, void *out, size_t size)
+{
+    nvs_handle_t handle;
+    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
+
+    size_t len = size;
+    const esp_err_t err = nvs_get_blob(handle, key, out, &len);
+    nvs_close(handle);
+    return err == ESP_OK && len == size;
+}
+
+esp_err_t love_store_save_ap_off(bool off)
+{
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    return store_set_u8(KEY_AP_OFF, off ? 1 : 0);
 }
 
 bool love_store_load_ap_off(void)
 {
     if (!s_ready) return false;
 
-    nvs_handle_t handle;
-    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
-
     // 键不存在(老固件升上来)与写坏都是同一个意思:没有"手动关过"的意图。
     uint8_t value = 0;
-    esp_err_t err = nvs_get_u8(handle, KEY_AP_OFF, &value);
-    nvs_close(handle);
-    return err == ESP_OK && value != 0;
+    return store_get_u8(KEY_AP_OFF, &value) && value != 0;
 }
 
 esp_err_t love_store_load_ap_pass(char *out, size_t size)
@@ -308,28 +354,15 @@ esp_err_t love_store_load_ap_pass(char *out, size_t size)
 esp_err_t love_store_save_debug_mode(bool on)
 {
     if (!s_ready) return ESP_ERR_INVALID_STATE;
-
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) return err;
-
-    err = nvs_set_u8(handle, KEY_DEBUG, on ? 1 : 0);
-    if (err == ESP_OK) err = nvs_commit(handle);
-    nvs_close(handle);
-    return err;
+    return store_set_u8(KEY_DEBUG, on ? 1 : 0);
 }
 
 bool love_store_load_debug_mode(void)
 {
     if (!s_ready) return false;
 
-    nvs_handle_t handle;
-    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
-
     uint8_t value = 0;
-    esp_err_t err = nvs_get_u8(handle, KEY_DEBUG, &value);
-    nvs_close(handle);
-    return err == ESP_OK && value != 0;
+    return store_get_u8(KEY_DEBUG, &value) && value != 0;
 }
 
 esp_err_t love_store_save_time(uint64_t epoch_seconds, love_time_src_t src)
@@ -337,14 +370,7 @@ esp_err_t love_store_save_time(uint64_t epoch_seconds, love_time_src_t src)
     if (!s_ready) return ESP_ERR_INVALID_STATE;
 
     const time_record_t record = { epoch_seconds, (uint8_t)src };
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) return err;
-
-    err = nvs_set_blob(handle, KEY_TIME, &record, sizeof(record));
-    if (err == ESP_OK) err = nvs_commit(handle);
-    nvs_close(handle);
-    return err;
+    return store_set_blob(KEY_TIME, &record, sizeof(record));
 }
 
 bool love_store_load_time(uint64_t *epoch_seconds, love_time_src_t *src)
@@ -353,15 +379,9 @@ bool love_store_load_time(uint64_t *epoch_seconds, love_time_src_t *src)
     if (src) *src = LOVE_TIME_SRC_NONE;
     if (!s_ready) return false;
 
-    nvs_handle_t handle;
-    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
-
     time_record_t record = { 0, 0 };
-    size_t size = sizeof(record);
-    esp_err_t err = nvs_get_blob(handle, KEY_TIME, &record, &size);
-    nvs_close(handle);
-
-    if (err != ESP_OK || size != sizeof(record) || record.epoch_seconds == 0) return false;
+    if (!store_get_blob(KEY_TIME, &record, sizeof(record))) return false;
+    if (record.epoch_seconds == 0) return false;
     // 来源是枚举而不是自由字段,NVS 里的值可能是被改坏或降级固件写进来的,
     // 超出已知范围就当作"未同步"。上界必须跟着 love_time_src_t 的最后一项目走。
     if (record.source > (uint8_t)LOVE_TIME_SRC_CONSOLE) record.source = (uint8_t)LOVE_TIME_SRC_NONE;
@@ -377,14 +397,7 @@ esp_err_t love_store_save_days_cache(int32_t days, uint64_t epoch_seconds)
     if (!s_ready) return ESP_ERR_INVALID_STATE;
 
     const days_cache_t record = { DAYS_CACHE_VERSION, days, epoch_seconds };
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) return err;
-
-    err = nvs_set_blob(handle, KEY_DAYS_CACHE, &record, sizeof(record));
-    if (err == ESP_OK) err = nvs_commit(handle);
-    nvs_close(handle);
-    return err;
+    return store_set_blob(KEY_DAYS_CACHE, &record, sizeof(record));
 }
 
 bool love_store_load_days_cache(int32_t *days, uint64_t *epoch_seconds)
@@ -393,15 +406,8 @@ bool love_store_load_days_cache(int32_t *days, uint64_t *epoch_seconds)
     if (epoch_seconds) *epoch_seconds = 0;
     if (!s_ready) return false;
 
-    nvs_handle_t handle;
-    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
-
     days_cache_t record = { 0, 0, 0 };
-    size_t size = sizeof(record);
-    esp_err_t err = nvs_get_blob(handle, KEY_DAYS_CACHE, &record, &size);
-    nvs_close(handle);
-
-    if (err != ESP_OK || size != sizeof(record)) return false;
+    if (!store_get_blob(KEY_DAYS_CACHE, &record, sizeof(record))) return false;
     if (record.version != DAYS_CACHE_VERSION) return false;
     if (record.epoch_seconds == 0) return false;
 
@@ -428,13 +434,7 @@ esp_err_t love_store_save_avatar(uint8_t slot, const void *data)
     char key[8];
     avatar_key(slot, key, sizeof(key));
 
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) return err;
-
-    err = nvs_set_blob(handle, key, &record, sizeof(record));
-    if (err == ESP_OK) err = nvs_commit(handle);
-    nvs_close(handle);
+    const esp_err_t err = store_set_blob(key, &record, sizeof(record));
     if (err != ESP_OK) ESP_LOGE(TAG, "保存头像 %u 失败: %s", (unsigned)slot, esp_err_to_name(err));
     return err;
 }
@@ -447,15 +447,10 @@ size_t love_store_load_avatar(uint8_t slot, void *out, size_t out_size)
     char key[8];
     avatar_key(slot, key, sizeof(key));
 
-    nvs_handle_t handle;
-    if (nvs_open(LOVE_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return 0;
-
     avatar_record_t record;
-    size_t size = sizeof(record);
-    esp_err_t err = nvs_get_blob(handle, key, &record, &size);
-    nvs_close(handle);
+    if (!store_get_blob(key, &record, sizeof(record))) return 0;
+    if (record.version != AVATAR_VERSION) return 0;
 
-    if (err != ESP_OK || size != sizeof(record) || record.version != AVATAR_VERSION) return 0;
     memcpy(out, record.data, LOVE_AVATAR_BYTES);
     return LOVE_AVATAR_BYTES;
 }

@@ -2,7 +2,6 @@
 #include "love_httpd.h"
 
 #include "love_admin_page.h"
-#include "love_ble.h"
 #include "love_date.h"
 #include "love_net.h"
 #include "love_store.h"
@@ -85,6 +84,14 @@ static esp_err_t send_error(httpd_req_t *req, const char *status, const char *me
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "error", message);
     return send_json(req, root, status);
+}
+
+// 已经解析出来的请求体,因参数不合法而回错时:**释放与回错必须同生共死**。
+// 两者总是成对出现,合成一个出口之后就不会再出现"回了错却忘了删 root"(请求体泄漏)。
+static esp_err_t fail_json(httpd_req_t *req, cJSON *root, const char *status, const char *msg)
+{
+    cJSON_Delete(root);
+    return send_error(req, status, msg);
 }
 
 /* ---------- base64(把自定义头像原样回给网页画缩略图) ---------- */
@@ -376,6 +383,19 @@ static esp_err_t handle_state(httpd_req_t *req)
     return send_json(req, state_to_json(), NULL);
 }
 
+// 两个头像接口的第一段是同一条:解析 slot 参数、校验范围、不合法就回 400。
+// 合法时返回 ESP_OK 并把槽位写进 *out_slot;不合法时返回的 esp_err_t 就是调用方
+// 应当直接返回给 httpd 的那个错误(响应已经发过了)。
+static esp_err_t avatar_slot(httpd_req_t *req, uint8_t *out_slot)
+{
+    const int slot = query_slot(req);
+    if (slot < 0 || slot >= LOVE_AVATAR_MAX) {
+        return send_error(req, "400 Bad Request", "slot 参数不合法");
+    }
+    *out_slot = (uint8_t)slot;
+    return ESP_OK;
+}
+
 // POST /api/avatar?slot=N
 // 请求体是 LOVE_AVATAR_BYTES 字节的 4bpp 索引数据(索引指向 love_pixel_palette),
 // 由后台网页用 canvas 压好再传,设备端不做图像处理。
@@ -383,17 +403,16 @@ static esp_err_t handle_avatar(httpd_req_t *req)
 {
     love_net_ap_touch();
 
-    const int slot = query_slot(req);
-    if (slot < 0 || slot >= LOVE_AVATAR_MAX) {
-        return send_error(req, "400 Bad Request", "slot 参数不合法");
-    }
+    uint8_t slot = 0;
+    const esp_err_t slot_err = avatar_slot(req, &slot);
+    if (slot_err != ESP_OK) return slot_err;
 
     static uint8_t data[LOVE_AVATAR_BYTES];
     if (read_exact(req, data, sizeof(data)) != ESP_OK) {
         return send_error(req, "400 Bad Request", "头像数据必须是 800 字节的 4bpp 数据");
     }
 
-    if (love_store_save_avatar((uint8_t)slot, data) != ESP_OK) {
+    if (love_store_save_avatar(slot, data) != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "保存头像失败");
     }
     // 成功也留一行:上传是 800 字节的二进制 POST,失败了页面只弹一个 toast,
@@ -407,17 +426,25 @@ static esp_err_t handle_avatar_clear(httpd_req_t *req)
 {
     love_net_ap_touch();
 
-    const int slot = query_slot(req);
-    if (slot < 0 || slot >= LOVE_AVATAR_MAX) {
-        return send_error(req, "400 Bad Request", "slot 参数不合法");
-    }
-    (void)love_store_clear_avatar((uint8_t)slot);
+    uint8_t slot = 0;
+    const esp_err_t slot_err = avatar_slot(req, &slot);
+    if (slot_err != ESP_OK) return slot_err;
+
+    (void)love_store_clear_avatar(slot);
     return finish(req);
 }
 
 // 把网页传来的 JSON 叠到 cfg 上。字段缺失时**保留原值** —— 浏览器缓存的旧 admin.js
 // 不带 category / viewMode / bleEnabled,一次保存就把用户分好的类或挑好的展示方式
 // 抹掉是不能接受的。
+// 图标号来自网页:0..LOVE_ICON_MAX-1 是内置图标,紧跟其后的是自定义头像槽位,
+// 合起来合法范围就是 [0, LOVE_ICON_TOTAL)。这里只挡明显越界的负数与超大值,
+// 与 love_config_sanitize 的分工一致(落盘前还会再收敛一次)。
+static bool icon_in_range(const cJSON *value)
+{
+    return cJSON_IsNumber(value) && value->valueint >= 0 && value->valueint < LOVE_ICON_TOTAL;
+}
+
 static void apply_config_json(const cJSON *root, love_config_t *cfg)
 {
     const cJSON *start = cJSON_GetObjectItem(root, "start");
@@ -449,7 +476,7 @@ static void apply_config_json(const cJSON *root, love_config_t *cfg)
                 snprintf(cfg->people[index].name, sizeof(cfg->people[index].name), "%s",
                          name->valuestring);
             }
-            if (cJSON_IsNumber(icon) && icon->valueint >= 0 && icon->valueint < LOVE_ICON_TOTAL) {
+            if (icon_in_range(icon)) {
                 cfg->people[index].icon = (uint8_t)icon->valueint;
             }
             index++;
@@ -492,12 +519,15 @@ static void apply_config_json(const cJSON *root, love_config_t *cfg)
                                  view->valueint == (int)LOVE_EVENT_VIEW_PAGE))
                                    ? (uint8_t)view->valueint
                                    : keep_view;
-            if (cJSON_IsNumber(icon) && icon->valueint >= 0 && icon->valueint < LOVE_ICON_TOTAL) {
+            if (icon_in_range(icon)) {
                 event->icon = (uint8_t)icon->valueint;
             }
-            if (cJSON_IsNumber(kind) && kind->valueint == LOVE_EVENT_ONCE) {
+            // 只认这两种;字段缺失、老页面没带、值不认识,一律按"每年一次"处理
+            // (与配置迁移里对新事件的默认口径一致)。
+            const int kind_value = cJSON_IsNumber(kind) ? kind->valueint : -1;
+            if (kind_value == LOVE_EVENT_ONCE) {
                 event->kind = LOVE_EVENT_ONCE;
-            } else if (cJSON_IsNumber(kind) && kind->valueint == LOVE_EVENT_LUNAR) {
+            } else if (kind_value == LOVE_EVENT_LUNAR) {
                 event->kind = LOVE_EVENT_LUNAR;
             } else {
                 event->kind = LOVE_EVENT_YEARLY;
@@ -537,8 +567,7 @@ static esp_err_t handle_config(httpd_req_t *req)
     // 回调里的整屏重绘 —— 放栈上实测直接把 httpd 任务(6KB 栈)顶穿,所以走堆。
     love_config_t *cfg = malloc(sizeof(*cfg));
     if (!cfg) {
-        cJSON_Delete(root);
-        return send_error(req, "500 Internal Server Error", "内存不足");
+        return fail_json(req, root, "500 Internal Server Error", "内存不足");
     }
     love_store_load_config(cfg);
     apply_config_json(root, cfg);
@@ -563,8 +592,7 @@ static esp_err_t handle_time(httpd_req_t *req)
 
     const cJSON *epoch = cJSON_GetObjectItem(root, "epoch");
     if (!cJSON_IsNumber(epoch) || epoch->valuedouble <= 0) {
-        cJSON_Delete(root);
-        return send_error(req, "400 Bad Request", "缺少 epoch(秒)");
+        return fail_json(req, root, "400 Bad Request", "缺少 epoch(秒)");
     }
     uint64_t value = (uint64_t)epoch->valuedouble;
     cJSON_Delete(root);
@@ -621,8 +649,7 @@ static esp_err_t handle_wifi_save(httpd_req_t *req)
     const cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
     const cJSON *pass = cJSON_GetObjectItem(root, "pass");
     if (!cJSON_IsString(ssid) || ssid->valuestring[0] == '\0') {
-        cJSON_Delete(root);
-        return send_error(req, "400 Bad Request", "请填写 Wi-Fi 名称");
+        return fail_json(req, root, "400 Bad Request", "请填写 Wi-Fi 名称");
     }
 
     esp_err_t err = love_net_set_credentials(ssid->valuestring,

@@ -23,7 +23,8 @@ typedef enum {
 #define LOVE_WIFI_SSID_MAX 33
 #define LOVE_WIFI_PASS_MAX 65
 
-// 初始化 NVS 并载入已保存的配置(缺失时写入默认值)。
+// 初始化 NVS。**不含载入**:配置由调用方自己 love_store_load_config() 取到它的状态里
+// (缺失时那份接口会给出默认值,不会往 NVS 里写东西)。
 esp_err_t love_store_init(void);
 
 // 出厂默认配置。实现留在本文件对应的 .c 里:默认事件要写 LOVE_ICON_BIRD 这类

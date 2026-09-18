@@ -21,6 +21,7 @@ WEB = ROOT / "assets/web"
 TEMPLATE = WEB / "admin.html"
 STYLESHEET = WEB / "admin.css"
 SCRIPT = WEB / "admin.js"
+AVATAR_SLIC = ROOT / "assets" / "web" / "avatar_slic.js"
 ASSETS = ROOT / "assets/images/web/assets.json"
 LUNAR_TABLE = ROOT / "assets/images/web/lunar.json"
 
@@ -80,7 +81,12 @@ ASSETS_JSON = json.loads(ASSETS.read_text(encoding="utf-8"))
 
 
 def _render_pages() -> tuple[bytes, bytes, bytes]:
-    """按 gen_admin_page.py 的同一套占位符规则渲染三个文本资源。"""
+    """按 gen_admin_page.py 的同一套占位符规则渲染三个文本资源。
+
+    占位符清单必须与 tools/gen_admin_page.py 一致 —— 少替换一个,页面会在浏览器里
+    直接抛 ReferenceError(实测踩过:头像内核没被内联,整页脚本停在第 32 行)。
+    生成器那边有"占位符未替换就报错"的自检,这里用同一个常量表兜住。
+    """
     icons = [{"label": icon["label"], "data": icon["data"]} for icon in ASSETS_JSON["icons"]]
     palette = [[int(h[i:i + 2], 16) for i in (1, 3, 5)] for h in ASSETS_JSON["palette"]]
 
@@ -88,6 +94,12 @@ def _render_pages() -> tuple[bytes, bytes, bytes]:
     script = script.replace("__ICONS_JSON__", json.dumps(icons, ensure_ascii=False))
     script = script.replace("__PALETTE_JSON__", json.dumps(palette))
     script = script.replace("__LUNAR_JSON__", LUNAR_TABLE.read_text(encoding="utf-8").strip())
+    script = script.replace("__AVATAR_SLIC_JS__", AVATAR_SLIC.read_text(encoding="utf-8").strip())
+
+    for placeholder in ("__ICONS_JSON__", "__PALETTE_JSON__", "__LUNAR_JSON__",
+                        "__AVATAR_SLIC_JS__"):
+        if placeholder in script:
+            raise SystemExit(f"预览渲染漏了占位符 {placeholder}")
 
     return (TEMPLATE.read_text(encoding="utf-8").encode("utf-8"),
             STYLESHEET.read_text(encoding="utf-8").encode("utf-8"),

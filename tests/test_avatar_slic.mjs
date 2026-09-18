@@ -52,8 +52,8 @@ new vm.Script(pageScript, { filename: "admin.js(inlined)" });   // 解析失败�
 
 const slic = vm.createContext({});
 vm.runInContext(SLIC_SOURCE, slic, { filename: "avatar_slic.js" });
-const slicPixelate = (px, gear) =>
-  vm.runInContext("slicPixelate", slic)(px, 40, PALETTE, gear);
+const slicPixelate = (px, params) =>
+  vm.runInContext("slicPixelate", slic)(px, 40, PALETTE, params);
 const packAvatar4bpp = vm.runInContext("packAvatar4bpp", slic);
 const work = 40 * vm.runInContext("SLIC_WORK_SCALE", slic);
 
@@ -159,6 +159,47 @@ const results = [];
   assert.equal(packed[399] & 0x0F, a[799]);
   for (const v of packed) assert.ok(v >= 0 && v <= 0xFF);
   results.push(`确定性 + 三档强度(soft ${nSoft} 色 / normal ${countDistinct(normal)} 色 / strong ${nStrong} 色) + 打包`);
+}
+
+/* ---------- 7. 上色方式与参数钳制 ---------- */
+{
+  // 同一张带噪声的图、同一套参数，只换上色方式:
+  //   center / vote 必须比 mean 留下更多颜色(这正是用户说的"mean 完全没有细节");
+  //   vote 又不能失控到把整张 16 色全用满得莫名其妙 —— 它仍然是"区域内的众数"。
+  let seed = 99;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const px = makeImage((x, y) => {
+    const base = Math.round((x + y) / (2 * work) * 200) + 30;
+    const n = Math.round((rnd() - 0.5) * 30);
+    return [base + n, base, 255 - base, 255];
+  });
+
+  const modes = ["mean", "center", "vote", "cell"];
+  const out = {};
+  for (const mode of modes) {
+    const a = slicPixelate(px, { step: 14, iters: 6, weight: 21, mode });
+    const b = slicPixelate(px, { step: 14, iters: 6, weight: 21, mode });
+    assert.deepEqual([...a], [...b], `${mode} 必须可复现`);
+    out[mode] = a;
+  }
+  const distinct = (idx) => new Set(idx).size;
+  assert.ok(distinct(out.center) >= distinct(out.mean),
+            `center 的颜色数(${distinct(out.center)}) 不该少于 mean(${distinct(out.mean)})`);
+  assert.ok(distinct(out.vote) >= distinct(out.mean),
+            `vote 的颜色数(${distinct(out.vote)}) 不该少于 mean(${distinct(out.mean)})`);
+
+  // 参数钳制:越界值被夹住而不是把算法带进沟里;未知 mode 回落到默认。
+  const resolved = vm.runInContext("resolveParams", slic);
+  const clamped = resolved({ step: 9999, iters: -3, weight: 0, mode: "nope" });
+  assert.ok(clamped.step <= 64 && clamped.step >= 2, "step 必须被夹到范围里");
+  assert.ok(clamped.iters >= 1 && clamped.weight >= 1, "iters/weight 必须被夹到范围里");
+  assert.equal(clamped.mode, vm.runInContext("DEFAULT_MODE", slic), "未知 mode 回落到默认");
+  // 档位名与参数对象两条入口都要能用。
+  assert.deepEqual(resolved("normal"), resolved({ step: 14, iters: 6, weight: 21,
+                                                  mode: vm.runInContext("DEFAULT_MODE", slic) }));
+  // cell 是默认模式：它按"格子内该区域的平均色"上色，是四个里细节最多的那个。
+  assert.ok(distinct(out.cell) >= distinct(out.mean), "cell 不该比 mean 更平");
+  results.push(`上色方式: mean ${distinct(out.mean)} / center ${distinct(out.center)} / vote ${distinct(out.vote)} / cell ${distinct(out.cell)} 色`);
 }
 
 // 生成脚本内联的那份也必须能解析(与上面 renderedPageScript 是同一件事的另一半:

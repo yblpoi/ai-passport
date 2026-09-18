@@ -101,6 +101,22 @@ button.ghost{background:#fff}
 .saved li span:first-child{flex:1 1 auto; overflow-wrap:anywhere}
 .saved li .cur{color:var(--red); font-weight:700; flex:0 0 auto}
 .saved li button{padding:3px 8px; font-size:12px; flex:0 0 auto}
+
+/* 高级参数（头像像素化）：折叠面板 + 滑块 + 实时预览。
+   预览画布用最近邻放大(image-rendering:pixelated)，否则 40x40 放大 4 倍会被插值糊掉，
+   看到的就不是设备上那块像素了。 */
+.adv{margin-top:12px; border:2px dashed #9a9a9a; background:#fff; padding:8px 10px}
+.adv summary{cursor:pointer; font-size:13px; font-weight:600}
+.adv summary .muted{font-weight:400}
+.adv .advrow{margin-top:8px}
+.adv .advrow label{margin:0 0 2px}
+.adv input[type=range]{width:100%; margin:0; accent-color:var(--red)}
+.adv .advpreview{display:flex; gap:10px; align-items:flex-start; margin-top:10px}
+.adv .advpreview canvas{
+  image-rendering:pixelated; width:160px; height:160px; flex:0 0 auto;
+  border:3px solid var(--ink); background:var(--pink);
+}
+.adv .advpreview p{flex:1 1 auto; margin:0}
 ul{list-style:none; margin:8px 0 0; padding:0}
 .toast{
   position:fixed; left:50%; bottom:22px; transform:translateX(-50%);

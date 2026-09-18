@@ -37,7 +37,7 @@ __AVATAR_SLIC_JS__
 // createImageBitmap 对它的支持比 <img> 窄得多;走 <img> 就是走浏览器自己的
 // 图像管线,手机直接拍的照片也能选。解码失败时给一句人话,不要把原始异常抛到
 // toast 里。
-async function compressAvatar(file, gearName){
+async function compressAvatar(file, params){
   const url = URL.createObjectURL(file);
   try {
     const bitmap = await new Promise((resolve, reject) => {
@@ -58,10 +58,123 @@ async function compressAvatar(file, gearName){
     ctx.drawImage(bitmap, (w - side) / 2, (h - side) / 2, side, side, 0, 0, work, work);
     const px = ctx.getImageData(0, 0, work, work).data;
 
-    return packAvatar4bpp(slicPixelate(px, AVA, PALETTE, gearName));
+    // 留一份工作图给高级参数的实时预览用：调滑块时不需要重新解码/缩放原图。
+    previewPx = px;
+    previewSourceNote = "";
+    return packAvatar4bpp(slicPixelate(px, AVA, PALETTE, params));
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/* ---------- 高级参数：像素化怎么算（照参考实现的 dat.GUI，多了实时预览） ---------- */
+//
+//   超像素大小 step    网格间距（工作图 240px 里的 px）。比输出格子(6px)还小时，
+//                      一格会横跨好几个区域，"多数票"会来回翻 → 起噪点。
+//   迭代次数 iters     少了边界更硬更碎，多了区域更整齐（也更容易大块平涂）。
+//   颜色权重 weight    "颜色差多少才算另一个区域"：越大越只按颜色分、区域越贴边。
+//   上色方式 mode      一格最后填什么颜色 —— 对细节影响最大，详见 avatar_slic.js。
+const ADV_DEFAULTS = { step: SLIC_GEARS[DEFAULT_GEAR].step, iters: SLIC_GEARS[DEFAULT_GEAR].iters,
+                       weight: SLIC_GEARS[DEFAULT_GEAR].weight, mode: DEFAULT_MODE };
+
+let avatarParams = Object.assign({}, ADV_DEFAULTS);
+let previewPx = null;          // 240x240 的工作图（选过照片、或取自现有头像）
+let previewSourceNote = "";    // 预览源是"刚选的照片"还是"设备上已有的头像"
+let previewTimer = 0;
+
+function advSyncLabels(){
+  byId("advStepVal").textContent = avatarParams.step;
+  byId("advItersVal").textContent = avatarParams.iters;
+  byId("advWeightVal").textContent = avatarParams.weight;
+  byId("advStep").value = avatarParams.step;
+  byId("advIters").value = avatarParams.iters;
+  byId("advWeight").value = avatarParams.weight;
+  byId("advMode").value = avatarParams.mode;
+}
+
+// 档位与滑块是一回事：选档 = 把三个数抄进滑块；动过滑块之后档位显示"自定义"。
+function advMarkGear(){
+  const name = byId("avatarStrength").value;
+  const g = SLIC_GEARS[name];
+  const isPreset = g && g.step === avatarParams.step && g.iters === avatarParams.iters &&
+                   g.weight === avatarParams.weight;
+  if (!isPreset) byId("avatarStrength").value = "custom";
+}
+
+function advApplyPreset(name){
+  const g = SLIC_GEARS[name];
+  if (!g) return;
+  avatarParams.step = g.step;
+  avatarParams.iters = g.iters;
+  avatarParams.weight = g.weight;
+  advSyncLabels();
+  advSchedulePreview();
+}
+
+function advFromInputs(){
+  avatarParams.step = Number(byId("advStep").value);
+  avatarParams.iters = Number(byId("advIters").value);
+  avatarParams.weight = Number(byId("advWeight").value);
+  avatarParams.mode = byId("advMode").value;
+  advSyncLabels();
+  advMarkGear();
+  advSchedulePreview();
+}
+
+// 预览：把 40x40 的索引按设备那张 16 色调色板画出来，放大 4 倍（像素风要最近邻，
+// CSS 的 image-rendering: pixelated 保证放大不发虚）。
+function advRenderPreview(){
+  const canvas = byId("advPreview");
+  if (!previewPx){
+    canvas.style.display = "none";
+    byId("advHint").textContent = "先在上面选一张照片，或直接调参数看效果。";
+    return;
+  }
+  const t0 = performance.now();
+  const idx = slicPixelate(previewPx, AVA, PALETTE, avatarParams);
+  const scale = 4, side = AVA * scale;
+  canvas.width = side; canvas.height = side;
+  canvas.style.display = "";
+  const ctx = canvas.getContext("2d");
+  const img = ctx.createImageData(side, side);
+  for (let y = 0; y < side; y++){
+    for (let x = 0; x < side; x++){
+      const p = PALETTE[idx[((y / scale) | 0) * AVA + ((x / scale) | 0)]] || [0, 0, 0];
+      const o = (y * side + x) * 4;
+      img.data[o] = p[0]; img.data[o + 1] = p[1]; img.data[o + 2] = p[2]; img.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  byId("advHint").textContent = "预览（40x40 放大 4 倍，用的就是设备那 16 色）：" +
+                                Math.round(performance.now() - t0) + " ms 算完。" + previewSourceNote;
+}
+
+function advSchedulePreview(){
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(advRenderPreview, 120);   // 拖滑块时别每像素都重算
+}
+
+// 没选过照片时，用设备上已有的某个自定义头像当预览源：把 4bpp 解成 40x40 索引、
+// 再按 6 倍放大成 240x240（相当于"如果拿这张头像再走一遍像素化"）。
+function advPreviewFromAvatar(){
+  if (previewPx) return;
+  const base64 = AVATARS.find((a) => a);
+  if (!base64) return;
+  const bin = atob(base64);
+  if (bin.length < AVATAR_BYTES) return;
+  const work = AVA * SLIC_WORK_SCALE, scale = SLIC_WORK_SCALE;
+  previewPx = new Uint8ClampedArray(work * work * 4);
+  for (let y = 0; y < work; y++){
+    for (let x = 0; x < work; x++){
+      const cell = ((y / scale) | 0) * AVA + ((x / scale) | 0);
+      const byte = bin.charCodeAt(cell >> 1);
+      const index = (cell % 2 === 0) ? (byte >> 4) : (byte & 0x0F);
+      const p = PALETTE[index] || [0, 0, 0];
+      const o = (y * work + x) * 4;
+      previewPx[o] = p[0]; previewPx[o + 1] = p[1]; previewPx[o + 2] = p[2]; previewPx[o + 3] = 255;
+    }
+  }
+  previewSourceNote = "（当前源：设备上已有的那张自定义头像；选一张新照片后会换成它）";
 }
 
 // 设备回传的 4bpp base64 -> 可直接显示的 data URI(选择器里的缩略图)
@@ -107,8 +220,7 @@ function setAvatarImg(el, idx){
 }
 
 async function uploadAvatar(slot, file){
-  const gear = byId("avatarStrength") ? byId("avatarStrength").value : DEFAULT_GEAR;
-  const bytes = await compressAvatar(file, gear);
+  const bytes = await compressAvatar(file, avatarParams);
   const res = await fetch(`/api/avatar?slot=${slot}`, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
@@ -145,6 +257,9 @@ function pickAvatarFile(onDone){
     if(!file) return;
     try{
       await onDone(file);
+      // 这张照片现在就是高级参数的预览源了，顺手把预览刷出来（compressAvatar 已经把
+      // 240x240 的工作图留在 previewPx 里）。
+      if (byId("advBox") && byId("advBox").open) advSchedulePreview();
     }catch(e){
       toast("上传失败：" + e.message);
     }
@@ -660,6 +775,9 @@ async function load(){
   // 先吃时间与电量，预览里的对时文案和右上角电量才不会先渲染成占位符。
   renderTimeAndNet(state);
   renderAll();
+  // 高级参数的档位/滑块对齐一次（AVATARS 到位后才谈得上"拿现有头像当预览源"）。
+  advSyncLabels();
+  advPreviewFromAvatar();
 }
 
 /* ---------- 已保存的网络 ---------- */
@@ -800,6 +918,28 @@ byId("apOff").onclick = async () => {
        toast("热点已关闭，不会再自动打开"); setTimeout(()=>load().catch(()=>{}), 1200);
   }catch(e){ toast("操作失败：" + e.message); }
 };
+/* ---------- 高级参数的事件 ---------- */
+// 选档位 = 把预设抄进滑块；动滑块 = 变成"自定义"档。
+byId("avatarStrength").onchange = (e) => {
+  advApplyPreset(e.target.value);
+  if (e.target.value === "custom") byId("advBox").open = true;
+};
+byId("advStep").oninput = advFromInputs;
+byId("advIters").oninput = advFromInputs;
+byId("advWeight").oninput = advFromInputs;
+byId("advMode").onchange = advFromInputs;
+byId("advReset").onclick = () => {
+  avatarParams = Object.assign({}, ADV_DEFAULTS);
+  byId("avatarStrength").value = DEFAULT_GEAR;
+  advSyncLabels();
+  advSchedulePreview();
+};
+// 展开面板时才准备预览（含"拿现有头像当源"那条路），不在页面加载时就白算一遍。
+byId("advBox").ontoggle = () => {
+  advPreviewFromAvatar();
+  advSchedulePreview();
+};
+
 byId("pvMain").onclick = () => showPreviewView("main");
 byId("pvEvent").onclick = () => showPreviewView("event");
 

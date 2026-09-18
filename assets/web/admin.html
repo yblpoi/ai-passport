@@ -77,10 +77,42 @@
          SLIC 超像素把照片按区域抹平成像素画，档位决定超像素的粗细。 -->
     <label for="avatarStrength">照片像素化强度<span class="muted">（上传照片时使用）</span></label>
     <select id="avatarStrength">
-      <option value="soft">弱：保留更多细节</option>
-      <option value="normal" selected>标准</option>
+      <option value="soft" selected>弱：保留更多细节</option>
+      <option value="normal">标准</option>
       <option value="strong">强：大块平涂，更像海报</option>
+      <option value="custom" hidden>自定义（见下面的高级参数）</option>
     </select>
+    <!-- 高级参数：三个旋钮 + 上色方式。照参考实现（xs7/Pixelate 的 dat.GUI）给的，
+         区别是这里直接给"设备那 16 色 + 40x40"下的实时预览，改完一眼能看到。 -->
+    <details class="adv" id="advBox">
+      <summary>高级参数<span class="muted">（改完即时预览；三档预设只是它们的组合）</span></summary>
+      <div class="advrow">
+        <label for="advStep">超像素大小 <b id="advStepVal">8</b><span class="muted"> px</span></label>
+        <input type="range" id="advStep" min="4" max="32" step="1" value="8">
+      </div>
+      <div class="advrow">
+        <label for="advIters">迭代次数 <b id="advItersVal">5</b></label>
+        <input type="range" id="advIters" min="1" max="12" step="1" value="5">
+      </div>
+      <div class="advrow">
+        <label for="advWeight">颜色权重 <b id="advWeightVal">12</b><span class="muted">（越小越按位置分块）</span></label>
+        <input type="range" id="advWeight" min="4" max="48" step="1" value="12">
+      </div>
+      <label for="advMode">上色方式<span class="muted">（一片区域该填什么色）</span></label>
+      <select id="advMode">
+        <option value="cell" selected>格子内该区域的平均色：细节最多</option>
+        <option value="center">区域中心那一颗原像素：对比强，同区域仍同色</option>
+        <option value="vote">区域内最多的调色板色：最典型的像素画</option>
+        <option value="mean">区域平均色：最平滑、最平涂</option>
+      </select>
+      <div class="advpreview">
+        <canvas id="advPreview" width="160" height="160"></canvas>
+        <p class="muted" id="advHint">先在这里选一张照片，或直接调参数看效果（预览对应当前这张图的 40x40 结果）。</p>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button type="button" class="ghost" id="advReset">恢复默认</button>
+      </div>
+    </details>
   </div>
 
   <div class="card">

@@ -931,7 +931,7 @@ static const lv_image_dsc_t icon_ring = {
     .data = (const uint8_t *)icon_ring_data,
 };
 
-static const uint8_t icon_leaf_data[864] = {
+static const uint8_t icon_loving_data[864] = {
     /* pal 0 */ 0x00, 0x00, 0x00, 0x00,
     /* pal 1 */ 0x4D, 0xCC, 0xFF, 0xFF,
     /* pal 2 */ 0x44, 0x2E, 0xDD, 0xFF,
@@ -990,11 +990,11 @@ static const uint8_t icon_leaf_data[864] = {
     0x00, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
-static const lv_image_dsc_t icon_leaf = {
+static const lv_image_dsc_t icon_loving = {
     .header = { .cf = LV_COLOR_FORMAT_I4,
                 .w = 40, .h = 40, .stride = 40 / 2 },
-    .data_size = sizeof(icon_leaf_data),
-    .data = (const uint8_t *)icon_leaf_data,
+    .data_size = sizeof(icon_loving_data),
+    .data = (const uint8_t *)icon_loving_data,
 };
 
 static const uint8_t icon_tree_data[864] = {
@@ -1136,7 +1136,7 @@ static const lv_image_dsc_t *const ICONS[16] = {
     &icon_gift,
     &icon_balloon,
     &icon_ring,
-    &icon_leaf,
+    &icon_loving,
     &icon_tree,
 };
 

@@ -83,7 +83,7 @@ void love_config_defaults(love_config_t *cfg)
         { "圣诞节",    LOVE_ICON_TREE,    LOVE_EVENT_YEARLY, 12, 25 },
         { "春节",      LOVE_ICON_GIFT,    LOVE_EVENT_LUNAR,  1,  1 },
         { "中秋",      LOVE_ICON_MOON,    LOVE_EVENT_LUNAR,  8,  15 },
-        { "端午",      LOVE_ICON_LEAF,    LOVE_EVENT_LUNAR,  5,  5 },
+        { "端午",      LOVE_ICON_LOVING,  LOVE_EVENT_LUNAR,  5,  5 },
     };
     const size_t count = sizeof(DEFAULTS) / sizeof(DEFAULTS[0]);
     for (size_t i = 0; i < count && i < LOVE_EVENT_MAX; i++) {

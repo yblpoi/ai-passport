@@ -19,7 +19,7 @@
 #define LOVE_ICON_GIFT 11  // 礼物
 #define LOVE_ICON_BALLOON 12  // 气球
 #define LOVE_ICON_RING 13  // 戒指
-#define LOVE_ICON_LEAF 14  // 爱你
+#define LOVE_ICON_LOVING 14  // 爱你
 #define LOVE_ICON_TREE 15  // 圣诞树
 
 #define LOVE_ICON_COUNT 16

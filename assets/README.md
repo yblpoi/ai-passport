@@ -172,9 +172,11 @@ Store reusable source images and generated display assets in `images/`.
   style now comes from the source art's own shapes, sampled onto a real grid.
 - The icon **order must not change**: `LOVE_ICON_*` indices are stored in the user's
   configuration, so reordering would silently change their icons. The historical
-  slot names are kept even where the art changed: slot 9 is still `LOVE_ICON_MOON`
-  and now holds a moon cake, slot 14 is still `LOVE_ICON_LEAF` and now holds a
-  smiling face with hearts.
+  Slot 9 keeps the name `LOVE_ICON_MOON` even though the art is now a moon cake - a
+  moon cake is still a moon cake. Slot 14 was renamed from `LOVE_ICON_LEAF` to
+  `LOVE_ICON_LOVING`: it holds a smiling face with hearts, and a name about leaves
+  would only mislead whoever reads the code next. Both are just names - the stored
+  configuration holds the slot *index*, so nothing on a user's device changed.
 - Generated output:
   - `images/love_pixel_art.c` and `main/love_pixel_art.h`: sixteen 40×40 4 bpp
     indexed (I4) icons (the 20×20 grid scaled 2×), a 48×48 RGB565 heart background

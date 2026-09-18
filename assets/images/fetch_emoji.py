@@ -48,7 +48,7 @@ EMOJI: list[tuple[str, str, str]] = [
     ("1f381", "gift", "U+1F381"),
     ("1f388", "balloon", "U+1F388"),
     ("1f48d", "ring", "U+1F48D"),
-    ("1f970", "leaf", "U+1F970"),
+    ("1f970", "loving", "U+1F970"),
     ("1f384", "tree", "U+1F384"),
 ]
 

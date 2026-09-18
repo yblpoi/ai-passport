@@ -102,22 +102,20 @@ pixel heart wallpaper. Only these three sizes are allowed.
   generated files. The symbol set can be copied verbatim out of the existing
   `Opts:` line.
 
-### ark12-subset.woff2 (kept for reference; the admin page no longer uses it)
+### Why the admin preview has no pixel font
 
-- File: `fonts/ark12-subset.woff2` (about 122 KB), same source and license.
-- **Nothing references it today.** The admin page preview now uses the browser's
-  own system font.
-- What it used to do: embed this subset so the preview showed the same dot-matrix
-  letterforms as the real device. It was dropped for size — 3,891 glyphs
-  (95 ASCII, ~40 CJK punctuation, 3,755 GB2312 level-1) average 32 bytes each,
-  while the page's own fixed text uses only 475 Chinese characters. Carrying the
-  full set so that *any* typed name would render in pixel form cost twenty times
-  the rest of the page. Serving it as its own route with an hour of caching was
-  still too heavy, so it is gone: the preview's coordinates, font sizes and line
-  heights are still exact (laid out on the device's 240×320 logical pixels), only
-  the letterforms are now vector.
-- To bring it back, regenerate it with the command below (the source TTF is not
-  stored in this repository; see the previous section for how to obtain it):
+- The preview is laid out on the device's 240×320 logical pixels - coordinates, font
+  sizes and line heights are exact - but its glyphs come from the browser's system
+  fonts. There is no `@font-face` on the page.
+- A subset of Ark Pixel 12px used to be embedded (3,891 glyphs: 95 ASCII, about 40
+  CJK punctuation marks and the 3,755 GB2312 level-1 ideographs; about 122 KB as
+  woff2) so that the preview showed the device's dot-matrix letterforms too. It was
+  dropped for size: the page's own fixed text uses only 475 Chinese characters, and
+  covering *any* typed name meant shipping twenty times the rest of the page.
+  Serving it as its own route with an hour of caching was still too heavy.
+- The file has been deleted from the repository (it was
+  `fonts/ark12-subset.woff2`). To bring the idea back, get the source TTF as
+  described in the section above and repack it:
 
   ```bash
   pyftsubset ark-pixel-12px-proportional-zh_cn.ttf \
@@ -125,12 +123,12 @@ pixel heart wallpaper. Only these three sizes are allowed.
     --layout-features='' --output-file=assets/fonts/ark12-subset.woff2
   ```
 
-  The charset file can be recovered verbatim from the `Opts: --symbols ...` line
-  at the top of `assets/fonts/love_font_12.c`. Re-enabling it also means updating
-  `tools/gen_admin_page.py` (font input and byte output),
-  `main/love_httpd.c` (the `/font.woff2` route) and `assets/web/admin.css`
-  (the `@font-face` rule).
-- Cost: about 122 KB in the repository. It is **not** in firmware Flash.
+  Re-enabling it also means re-adding the font input in `tools/gen_admin_page.py`,
+  the `/font.woff2` route in `main/love_httpd.c` and the `@font-face` rule in
+  `assets/web/admin.css`. Note the charset is no longer the 3,755 characters of its
+  day: the device fonts now cover level 1 plus level 2 (6,910 characters), so
+  rebuilding from the `Opts:` line of `love_font_12.c` would give roughly twice the
+  bytes.
 
 ## Images
 

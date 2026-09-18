@@ -150,17 +150,20 @@ Store reusable source images and generated display assets in `images/`.
 ### Commemorative-day pixel art (love_pixel_art)
 
 - Source: `images/love_pixel_art_gen.py` (8×8 pixel masks plus a palette, no
-- Four of the sixteen icons were redrawn on 2026-09-18: **bird, dog, rabbit and
-  tree**. Their silhouettes did not read at 40 px (the bird was a yellow blob, the
-  rabbit looked like a cup, the dog's ears looked like a pair of horns, and the
-  tree's red trunk sat in the middle of the foliage). The new masks were laid out
-  on the 8x8 grid by hand from a design sheet produced with an AI image generator:
-  the generator's own "pixels" do not land on a real grid and its outlines are
-  hairlines, so downsampling its output directly just smears it. The other twelve
-  are unchanged - they already read clearly, and my attempts to redraw them came
-  out worse. The icon **order** is untouched: `LOVE_ICON_*` indices are stored in
-  the user's configuration, so reordering would silently change their icons.
-  third-party dependencies).
+- All sixteen icons were redrawn on 2026-09-18 into one consistent style (a single
+  dark pixel of outline, flat colours, symmetric silhouettes), so that each of them
+  reads at a glance at 40 px. Before that, the bird was a yellow blob, the rabbit
+  looked like a cup, the dog's ears looked like horns, the tree's trunk sat in the
+  middle of the foliage, the star read as a fat plus with two legs, and the flower,
+  cake, ring and balloon were all ambiguous. The masks were laid out on the 8x8 grid
+  by hand from a design sheet produced with an AI image generator - the generator's
+  own "pixels" do not land on a real grid and its outlines are hairlines, so its
+  output cannot be downsampled into this format. It went in two passes: the four that
+  did not read at all first (bird, dog, rabbit, tree), then the other twelve once the
+  style was settled. The **star is a five-pointed star** (a top point, two arms, two
+  legs and a narrow waist); an earlier attempt drew a four-point sparkle instead.
+- The icon **order must not change**: `LOVE_ICON_*` indices are stored in the user's
+  configuration, so reordering would silently change their icons.
 - Generated output:
   - `images/love_pixel_art.c` and `main/love_pixel_art.h`: sixteen 40×40 4 bpp
     indexed (I4) icons (masks scaled 5× — only integer factors avoid half pixels),

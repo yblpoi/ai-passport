@@ -184,8 +184,18 @@ Store reusable source images and generated display assets in `images/`.
   (`icon_v4_to_v5()` in `main/love_config.c`, covered by a host test).
 - Generated output:
   - `images/love_pixel_art.c` and `main/love_pixel_art.h`: eighteen 40×40 4 bpp
-    indexed (I4) icons (the 20×20 grid scaled 2×), a 48×48 RGB565 heart background
+    indexed (I4) icons (the 20×20 grid scaled 2×), a 48×48 I1 heart background
     tile, and `love_pixel_palette[16]`.
+  - The tile **draws hearts only, never a background**: it has just two colours,
+    white (index 1) and transparent (index 0), so it packs into 1 bpp — 296 bytes
+    including the palette, against 4,608 bytes for the old RGB565 version. The
+    background colour comes through at runtime from the **screen style's
+    `bg_color`** (on the web side, `background-color` on `body` and `.screen`; see
+    `render()` in `main/love_app.c` and `--pink` in `assets/web/admin.css`), so
+    changing it is a one-value edit that needs neither regenerating the art nor
+    reflashing the tile. Avatars work the same way: the asset carries only shape
+    and colour, while the parts that vary — background, corner radius — live at
+    runtime.
   - Each icon carries **its own** 16-colour palette: the union of the eighteen
     graphics' colours is far past sixteen entries, and the `lv_bin_decoder`
     convention already puts the palette at the head of each image's data. An icon
@@ -250,8 +260,8 @@ Store reusable source images and generated display assets in `images/`.
   remain under **CC-BY 4.0** — see `images/emoji/LICENSE-GRAPHICS.txt` for the full
   text, which must stay with the art. The heart background tile is original artwork
   for this repository and uses the repository license.
-- Cost: about 123 KB of source and 20 KB of Flash for icons, tile and palette
-  (15.2 KB icons — eighteen 864-byte I4 images — plus a 4.6 KB tile); I4 icons are
+- Cost: about 119 KB of source and 18 KB of Flash for icons, tile and palette
+  (15.2 KB icons — eighteen 864-byte I4 images — plus a 296-byte tile); I4 icons are
   converted row by row while drawing and are never cached as a full screen.
 
 ### Lunar calendar table (love_lunar_table)

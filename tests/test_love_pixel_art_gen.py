@@ -333,6 +333,48 @@ class IconInvariantsTest(unittest.TestCase):
         self.assertEqual(data[64 + 2 * row_bytes], 0x00, "grid[1] 左侧两格是透明")
         self.assertEqual(data[64 + 2 * row_bytes + 1], (blue << 4) | blue)
 
+    def test_bg_tile_is_a_two_colour_i1_with_the_recorded_stride(self):
+        """爱心底纹是"透明 + 半透明白"两色的 I1 图。
+
+        钉住的是**设备侧那份 C 数据**的格式契约(就是 lv_bin_decoder 对
+        LV_IMAGE_SRC_VARIABLE + 索引格式的读法):data 开头是 2 项 (B,G,R,A)
+        调色板,其后每字节 8 像素、高位在左,stride 是**字节/行**。
+        只断言总长度 296 挡不住 stride 被写成 48 —— 那才是会整屏斜纹的那种错。
+
+        另外把"按解码器的读法"反解出来的 48x48 与生成器自己那份逐像素比对:
+        两边同源,但这一遍是照着读法解回来的,打包方向/位置写错会在这里露出来。
+        """
+        text = (ROOT / "assets/images/love_pixel_art.c").read_text(encoding="utf-8")
+        self.assertRegex(text, r"static const uint8_t bg_tile_data\[296\] = \{")
+        self.assertRegex(text, r"\.cf = LV_COLOR_FORMAT_I1")
+        self.assertRegex(text, r"\.w = 48, \.h = 48, \.stride = 48 / 8")
+        self.assertRegex(text, r"\.data_size = sizeof\(bg_tile_data\)")
+
+        match = re.search(r"static const uint8_t bg_tile_data\[296\] = \{(.*?)\n\};",
+                          text, re.S)
+        self.assertIsNotNone(match)
+        body = re.sub(r"/\*.*?\*/", "", match.group(1))
+        data = [int(v, 16) for v in re.findall(r"0x([0-9A-F]{2})", body)]
+        self.assertEqual(len(data), 296)
+
+        palette = [tuple(reversed(data[i * 4:i * 4 + 3])) + (data[i * 4 + 3],)
+                   for i in range(2)]
+        self.assertEqual(palette[0], (0, 0, 0, 0), "索引 0 必须是全透明")
+        self.assertEqual(palette[1], (*GEN.BG_HEART, GEN.BG_HEART_ALPHA),
+                         "索引 1 = 爱心色 + 它的不透明度")
+        # 爱心压在底色上,100% 会太抢眼(用户实机反馈),30% 左右才是一层淡淡的光斑。
+        self.assertAlmostEqual(GEN.BG_HEART_ALPHA / 255, 0.30, delta=0.02)
+
+        bits = data[8:]
+        self.assertEqual(len(bits), GEN.BG_TILE_PX * (GEN.BG_TILE_PX // 8))
+        built = GEN.build_bg_tile()
+        for y in range(GEN.BG_TILE_PX):
+            for x in range(GEN.BG_TILE_PX):
+                # 每字节 8 像素、高位是最左(y 行第 0 个)像素。
+                index = (bits[y * (GEN.BG_TILE_PX // 8) + x // 8] >> (7 - (x % 8))) & 1
+                self.assertEqual(index, 1 if built[y][x][3] else 0,
+                                 f"({x},{y}) 的索引位与 build_bg_tile() 不一致")
+
     def test_generate_is_deterministic(self):
         """跑两遍得到逐字节相同的产物（不许依赖 set/dict 的迭代顺序）。"""
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:

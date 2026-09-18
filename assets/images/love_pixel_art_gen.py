@@ -120,8 +120,15 @@ HEART_MASK = [
     "...KrK..",
     "....K...",
 ]
-BG_BASE = (0xF1, 0x95, 0x9E)    # 粉色底
-BG_HEART = (0xEA, 0xA5, 0xAC)   # 略深的粉爱心
+# 底纹只画爱心、不画底色：底色由设备 style 的 bg_color（网页端是 body 的
+# background-color）提供。这样换底色只改一个颜色值，不用重新生成素材；
+# 只有"白 + 透明"两色还能压成 I1，一张 296 字节（原来的 RGB565 是 4608 字节）。
+BG_HEART = (0xFF, 0xFF, 0xFF)   # 白爱心
+# 爱心按 30% 不透明度叠在底色上。100% 试过：纯白压粉底太抢眼，整屏像贴纸；
+# 30% 只剩一层淡淡的光斑，底色是什么它就是什么色系（改底色不用动这里）。
+# 索引图的调色板每项都是 (B,G,R,A)，alpha 直接参与混合 —— 设备端与网页端
+# （PNG 的 alpha 通道）用的是同一个值，两端看起来才对得上。
+BG_HEART_ALPHA = 77             # ≈ 255 x 0.30
 
 
 def parse_mask(mask: list[str], size: int = MASK_PX) -> list[list[tuple[int, int, int, int]]]:
@@ -445,10 +452,13 @@ def build_zoom_sheet(arrays) -> list[list[tuple[int, int, int, int]]]:
     return sheet
 
 
-def build_bg_tile() -> list[list[tuple[int, int, int]]]:
-    """48x48 无缝平铺:两颗错位爱心，对应截图里的爱心壁纸。"""
-    base = BG_BASE
-    tile = [[base for _ in range(BG_TILE_PX)] for _ in range(BG_TILE_PX)]
+def build_bg_tile() -> list[list[tuple[int, int, int, int]]]:
+    """48x48 无缝平铺:两颗错位白爱心,其余透明。
+
+    返回值是 RGBA 行,透明处 alpha=0 —— 网页那张 bg_tile.png 直接用它写出,
+    设备端再把它压成 I1(见 generate 里的 bg_palette)。底色两边都不在这张图里。
+    """
+    tile = [[(0, 0, 0, 0) for _ in range(BG_TILE_PX)] for _ in range(BG_TILE_PX)]
     heart = scale(parse_mask(HEART_MASK), 2)  # 16x16
     for origin_y, origin_x in ((6, 6), (30, 30)):
         for r, row in enumerate(heart):
@@ -458,7 +468,7 @@ def build_bg_tile() -> list[list[tuple[int, int, int]]]:
                 y = origin_y + r
                 x = origin_x + c
                 if 0 <= y < BG_TILE_PX and 0 <= x < BG_TILE_PX:
-                    tile[y][x] = BG_HEART
+                    tile[y][x] = (*BG_HEART, BG_HEART_ALPHA)
     return tile
 
 
@@ -528,19 +538,33 @@ def generate(root: Path = ROOT) -> int:
 
     tile = build_bg_tile()
 
-    def rgb565(px: tuple[int, int, int]) -> int:
-        r, g, b = px
-        return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-
-    c_lines.append(f"static const uint16_t bg_tile_data[{BG_TILE_PX * BG_TILE_PX}] = {{")
+    # 底纹只有"透明 + 半透明白"两色,用 I1 就够:每字节 8 像素、高位在前,数据开头是
+    # 2 项 (B,G,R,A) 调色板 —— 与图标同为 lv_bin_decoder 对索引格式的约定,
+    # 见 decode_indexed_line。整张 8 + 288 = 296 字节,原 RGB565 是 4608。
+    bg_palette = [(0, 0, 0, 0), (*BG_HEART, BG_HEART_ALPHA)]
+    bg_bits = bytearray()
     for row in tile:
-        c_lines.append("    " + ", ".join(f"0x{rgb565(px):04X}" for px in row) + ",")
+        for x in range(0, BG_TILE_PX, 8):
+            byte = 0
+            for bit in range(8):
+                if row[x + bit][3] != 0:
+                    byte |= 0x80 >> bit
+            bg_bits.append(byte)
+
+    bg_row_bytes = BG_TILE_PX // 8
+    c_lines.append(
+        f"static const uint8_t bg_tile_data[{len(bg_palette) * 4 + len(bg_bits)}] = {{")
+    for i, (r, g, b, a) in enumerate(bg_palette):
+        c_lines.append(f"    /* pal{i} */ 0x{b:02X}, 0x{g:02X}, 0x{r:02X}, 0x{a:02X},")
+    for off in range(0, len(bg_bits), bg_row_bytes):
+        c_lines.append("    " + ", ".join(
+            f"0x{v:02X}" for v in bg_bits[off:off + bg_row_bytes]) + ",")
     c_lines += [
         "};",
         "",
         "static const lv_image_dsc_t bg_tile = {",
-        "    .header = { .cf = LV_COLOR_FORMAT_RGB565,",
-        f"                .w = {BG_TILE_PX}, .h = {BG_TILE_PX}, .stride = {BG_TILE_PX} * 2 }},",
+        "    .header = { .cf = LV_COLOR_FORMAT_I1,",
+        f"                .w = {BG_TILE_PX}, .h = {BG_TILE_PX}, .stride = {BG_TILE_PX} / 8 }},",
         "    .data_size = sizeof(bg_tile_data),",
         "    .data = (const uint8_t *)bg_tile_data,",
         "};",
@@ -613,9 +637,10 @@ def generate(root: Path = ROOT) -> int:
                     + base64.b64encode(png_path.read_bytes()).decode("ascii"),
         })
 
-    # 爱心底纹同样导出给网页,保证后台和设备是同一张壁纸。
+    # 爱心底纹同样导出给网页,保证后台和设备是同一张壁纸(同样只画爱心不画底色,
+    # 网页端由 body 与 .screen 的 background-color 提供粉底)。
     bg_png = web_dir / "bg_tile.png"
-    write_png(bg_png, [[(r, g, b, 255) for (r, g, b) in row] for row in tile])
+    write_png(bg_png, tile)
     bg_data_uri = ("data:image/png;base64,"
                    + base64.b64encode(bg_png.read_bytes()).decode("ascii"))
 

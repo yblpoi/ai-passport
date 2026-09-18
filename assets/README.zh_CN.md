@@ -144,10 +144,10 @@
     内存顺序 B,G,R,A），其后是每字节 2 像素、高半字节在前的索引。这是
     `lv_bin_decoder` 对 `LV_IMAGE_SRC_VARIABLE` + 索引格式的约定，所以不需要开
     `LV_BIN_DECODER_RAM_LOAD`，绘制时按行按需转换。图标自带调色板的索引 0 固定为
-    透明（图标是镂空的），与下面那张不含透明项的头像调色板是两张表。
-  - `images/web/`：同一批网格导出的 PNG、`icons.json`/`assets.json` 数据 URI、
-    调色板（`palette` 字段）、`contact-sheet.png` 与 3 倍放大棋盘底的
-    `contact-sheet-zoom.png` 核对图，供后台网页使用。
+    透明（图标是透明背景的图形），与下面那张不含透明项的头像调色板是两张表。
+  - `images/web/`：同一批网格导出的 PNG、`assets.json`（底纹与图标的数据 URI 加
+    `palette` 字段——后台网页只内联这一个文件，所以没有第二份图标清单）、
+    `contact-sheet.png` 与 3 倍放大棋盘底的 `contact-sheet-zoom.png` 核对图。
 - 调色板顺序即自定义头像 4bpp 的索引顺序（`PALETTE_ORDER`），**改动等于让所有
   已上传的自定义头像换色**，所以是显式写死的而不是依赖 dict 顺序。
 - 头像圆角：半径 **4px**，**只作用于自定义头像**（上传的照片，满幅方角）；

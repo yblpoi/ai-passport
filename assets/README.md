@@ -193,11 +193,13 @@ Store reusable source images and generated display assets in `images/`.
     `lv_bin_decoder` convention for `LV_IMAGE_SRC_VARIABLE` plus an indexed format,
     so `LV_BIN_DECODER_RAM_LOAD` is not needed and rows are converted on demand
     while drawing. Index 0 of the per-icon palette is fixed to transparent (the
-    icons are hollow), which is a separate table from the avatar palette below.
-  - `images/web/`: PNGs exported from the same grids, `icons.json`/`assets.json`
-    data URIs, the palette (`palette` field), and `contact-sheet.png` plus
-    `contact-sheet-zoom.png` (3× nearest-neighbour on a checkerboard) for manual
-    review, all used by the admin page.
+    icons are shapes on a transparent background), which is a separate table from
+    the avatar palette below.
+  - `images/web/`: PNGs exported from the same grids, `assets.json` (the tile and
+    icon data URIs plus the `palette` field - the only file the admin page inlines,
+    which is why there is no second copy of the icon list), and
+    `contact-sheet.png` plus `contact-sheet-zoom.png` (3× nearest-neighbour on a
+    checkerboard) for manual review.
 - The palette order is the 4 bpp index order for uploaded custom avatars
   (`PALETTE_ORDER`). **Changing it recolors every avatar already uploaded**, so it
   is written out explicitly rather than relying on dict order.

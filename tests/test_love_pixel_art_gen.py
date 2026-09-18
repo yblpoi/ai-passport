@@ -339,12 +339,13 @@ class IconInvariantsTest(unittest.TestCase):
             GEN.generate(b)
             for relative in ("assets/images/love_pixel_art.c", "main/love_pixel_art.h",
                              "assets/images/web/assets.json",
-                             "assets/images/web/icons.json",
-                             "assets/images/web/contact-sheet.png"):
+                             "assets/images/web/contact-sheet.png",
+                             "assets/images/web/contact-sheet-zoom.png"):
                 self.assertEqual((a / relative).read_bytes(), (b / relative).read_bytes(),
                                  relative)
-            icons_json = json.loads((a / "assets/images/web/icons.json").read_text(encoding="utf-8"))
-            self.assertEqual([entry["id"] for entry in icons_json],
+            assets = json.loads(
+                (a / "assets/images/web/assets.json").read_text(encoding="utf-8"))
+            self.assertEqual([entry["id"] for entry in assets["icons"]],
                              [name for name, _label, _code in GEN.EMOJI])
             device_c = (a / "assets/images/love_pixel_art.c").read_text(encoding="utf-8")
             self.assertEqual(device_c.count("_data[864]"), len(GEN.EMOJI))

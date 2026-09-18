@@ -1,5 +1,5 @@
 // assets/images/love_pixel_art.c —— 由 assets/images/love_pixel_art_gen.py 生成,请勿手改。
-// 同一份掩码也导出到 assets/images/web/ 供后台网页使用,两端视觉一致。
+// 同一批网格也导出到 assets/images/web/ 供后台网页使用,两端视觉一致。
 //
 // 图标是 LV_COLOR_FORMAT_I4:数据开头是 16 个 lv_color32_t 调色板(内存顺序
 // B,G,R,A),后面是每字节 2 像素、高半字节在前的索引。这是 lv_bin_decoder 对

@@ -6,8 +6,8 @@
 1. `assets/images/love_pixel_art.c` + `main/love_pixel_art.h`
    —— 40x40 的 4bpp 索引图标（每张自带 16 色调色板，索引 0 恒为透明）与
    48x48 爱心底纹。
-2. `assets/images/web/icon_<name>.png` + `assets/images/web/icons.json`
-   —— 网页用的同款 PNG 与 base64 数据表。
+2. `assets/images/web/icon_<name>.png` + `assets/images/web/assets.json`
+   —— 网页用的同款 PNG 与 base64 数据表（底纹、图标、调色板）。
 3. `assets/images/web/contact-sheet.png` + `contact-sheet-zoom.png`
    —— 仅供人工核对的预览图（后者 3 倍放大、棋盘底色，看细节用）。
 
@@ -32,7 +32,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEVICE_C = ROOT / "assets/images/love_pixel_art.c"
-DEVICE_H = ROOT / "main/love_pixel_art.h"
 WEB_DIR = ROOT / "assets/images/web"
 
 MASK_PX = 8      # 底纹掩码的边长（图标用的是下面的 Twemoji 素材）
@@ -47,20 +46,16 @@ MAX_OPAQUE_COLORS = 15    # I4 的 16 个槽位里给透明留一格
 ZOOM_SHEET_SCALE = 3      # 放大联络表：每图放大 3 倍（最近邻）
 ZOOM_SHEET_COLUMNS = 8    # 一行放 8 个，16 张正好两行
 
-# 为什么内置图标**不做**圆角(以及为什么"缩小一点"解决不了问题):
+# 为什么内置图标**不做**圆角:
 #
-# 这些图标是 8x8 掩码放大 5 倍的**透明背景图形**,不是方块牌。四角有 8 个图标的描边
-# 确实伸到了画布边缘(猫/狗/熊/狐狸的顶部两角、星星/蛋糕/礼物的底部两角、叶子各一个),
-# 施半径 4px 的圆角会各切掉 6 个描边像素,合计 48 个(占全部图标像素的 0.19%)。
-# 而"把图标缩小一点让圆角只落在空白上"是无效的:缩小后圆角落在透明上,视觉上等于
-# 没有圆角,唯一可见的变化就是图标变小了 —— 8x8 掩码从 5x 降到 4x 会小 20%。
-# 换句话说图形类图标要么保持原样(方角,但没人看得出"方"),要么被切;两者之间没有
-# 更好的第三选项。这里选保持原样。
+# 它们是透明背景的**图形**,不是方块照片。实测 16 张生成图里只有猫咪的两个上角碰到
+# 画布边缘 —— 4px 圆角只会切到它、其余 15 张毫无变化,这条规则就只会作用于唯一需要
+# 注意边角的那个图标。图形类图标只有"保持原样"和"被切"两种选择,这里选保持原样;
+# 圆形底座同理不做。
 #
 # 圆角只作用于**自定义头像**(照片,满幅方角),由 main/ui_pixel_math.c 的
-# ui_pixel_corner_cut() 在 ui_pixel_pack_avatar_i4() 里把角落改指到透明索引;网页端 admin.css
-# 用同一个半径,并且只给自定义头像的 img 加圆角(给图形图标加会同样切到描边)。
-# 圆形底座仍然不做:实测圆形会让 16 个角色里 15 个掉实心像素(猫咪少 186、礼物少 284)。
+# ui_pixel_corner_cut() 在 ui_pixel_pack_avatar_i4() 里把角落改指到透明索引;网页端
+# assets/web/admin.css 用同一个半径(4px),并且只给自定义头像的 img 加圆角。
 
 
 # 与 main/ui_pixel.h 的配色保持一致，避免设备与网页出现两套颜色。
@@ -380,11 +375,12 @@ def per_icon_palette(grid) -> list[tuple[int, int, int, int]]:
     return palette + [(0, 0, 0, 0)] * (16 - len(palette))
 
 
-def pack_icon_i4(grid, palette) -> bytes:
-    """把 n x n 的逻辑像素整数倍放大后打包成 LV_COLOR_FORMAT_I4 字节流：
-    开头 16 项 (B,G,R,A)，后面每字节 2 像素、高半字节在前。整张 864 字节。"""
+def scaled_index_rows(grid, palette) -> list[list[int]]:
+    """把逻辑像素网格放大 EMOJI_SCALE 倍、映射成这张图的调色板索引（透明格是 0）。
+
+    设备那份 I4 数据与网页 PNG 都从这里出发 —— "放大 + 查索引"只写一份。
+    """
     index = {px: i for i, px in enumerate(palette)}
-    side = len(grid) * EMOJI_SCALE
     rows: list[list[int]] = []
     for row in grid:
         scaled: list[int] = []
@@ -392,9 +388,15 @@ def pack_icon_i4(grid, palette) -> bytes:
             scaled.extend([0 if cell is None else
                            index[(cell[0], cell[1], cell[2], 255)]] * EMOJI_SCALE)
         rows.extend([scaled] * EMOJI_SCALE)
+    return rows
+
+
+def pack_icon_i4(grid, palette) -> bytes:
+    """把逻辑像素网格打包成 LV_COLOR_FORMAT_I4 字节流：开头 16 项 (B,G,R,A)，
+    后面每字节 2 像素、高半字节在前。整张 864 字节。"""
     packed = bytearray()
-    for row in rows:
-        for x in range(0, side, 2):
+    for row in scaled_index_rows(grid, palette):
+        for x in range(0, len(row), 2):
             packed.append((row[x] << 4) | row[x + 1])
     out = bytearray()
     for r, g, b, a in palette:
@@ -409,15 +411,7 @@ def grid_to_rows(grid, palette) -> list[list[tuple[int, int, int, int]]]:
     网页 PNG 与放大联络表都用它，和设备那份 I4 数据出自同一个网格——两端不会画出
     不一样的东西。
     """
-    index = {px: i for i, px in enumerate(palette)}
-    rows: list[list[tuple[int, int, int, int]]] = []
-    for row in grid:
-        scaled: list[tuple[int, int, int, int]] = []
-        for cell in row:
-            px = palette[0 if cell is None else index[(cell[0], cell[1], cell[2], 255)]]
-            scaled.extend([px] * EMOJI_SCALE)
-        rows.extend([scaled] * EMOJI_SCALE)
-    return rows
+    return [[palette[i] for i in row] for row in scaled_index_rows(grid, palette)]
 
 
 def build_zoom_sheet(arrays) -> list[list[tuple[int, int, int, int]]]:
@@ -492,7 +486,7 @@ def generate(root: Path = ROOT) -> int:
 
     c_lines = [
         "// assets/images/love_pixel_art.c —— 由 assets/images/love_pixel_art_gen.py 生成,请勿手改。",
-        "// 同一份掩码也导出到 assets/images/web/ 供后台网页使用,两端视觉一致。",
+        "// 同一批网格也导出到 assets/images/web/ 供后台网页使用,两端视觉一致。",
         "//",
         "// 图标是 LV_COLOR_FORMAT_I4:数据开头是 16 个 lv_color32_t 调色板(内存顺序",
         "// B,G,R,A),后面是每字节 2 像素、高半字节在前的索引。这是 lv_bin_decoder 对",
@@ -581,7 +575,6 @@ def generate(root: Path = ROOT) -> int:
         "",
         f"#define LOVE_ICON_COUNT {len(icons)}",
         f"#define LOVE_ICON_PX {ICON_PX}",
-        f"#define LOVE_BG_TILE_PX {BG_TILE_PX}",
         "",
         "// 16 色调色板,顺序即自定义头像的 4bpp 索引顺序。",
         "// 后台网页按同一张表量化上传的图片,所以两端颜色是同一套。",
@@ -624,8 +617,8 @@ def generate(root: Path = ROOT) -> int:
                    + base64.b64encode(bg_png.read_bytes()).decode("ascii"))
 
     palette_hex = ["#%02X%02X%02X" % PALETTE[ch] for ch in PALETTE_ORDER]
-    (web_dir / "icons.json").write_text(
-        json.dumps(web_entries, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # 只留 assets.json：网页唯一消费的素材表就是它（内联进 admin.js 的是它的
+    # icons 与 palette），再写一份内容相同的 icons.json 只会多一个没人读的孤儿。
     (web_dir / "assets.json").write_text(
         json.dumps({ "bgTile": bg_data_uri, "icons": web_entries, "palette": palette_hex },
                    ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

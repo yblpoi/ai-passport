@@ -24,7 +24,6 @@
 
 #define LOVE_ICON_COUNT 16
 #define LOVE_ICON_PX 40
-#define LOVE_BG_TILE_PX 48
 
 // 16 色调色板,顺序即自定义头像的 4bpp 索引顺序。
 // 后台网页按同一张表量化上传的图片,所以两端颜色是同一套。

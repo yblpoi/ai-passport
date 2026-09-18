@@ -330,7 +330,7 @@ static lv_image_dsc_t s_avatar_dsc[AVATAR_DECODE_MAX];
 static int s_avatar_slot[AVATAR_DECODE_MAX];
 static int s_avatar_used;
 
-// 头像圆角:半径必须与 assets/images/love_pixel_art_gen.py 的 ICON_CORNER_RADIUS 一致。
+// 头像圆角:半径 4px,网页端 assets/web/admin.css 的 .rounded 用同一个值(缩略图靠 CSS)。
 // 内置图标是在生成器里把角落像素改成透明的(调色板索引 0 即透明),自定义头像的
 // 调色板没有透明项,只能在这里解码时把角落的 alpha 置 0 —— 两边视觉上才是同一套圆角。
 // 存的 4bpp 数据不动,所以上传、存储、网页缩略图都不受影响。

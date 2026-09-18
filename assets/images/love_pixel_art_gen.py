@@ -538,33 +538,30 @@ def generate(root: Path = ROOT) -> int:
 
     tile = build_bg_tile()
 
-    # 底纹只有"透明 + 半透明白"两色,用 I1 就够:每字节 8 像素、高位在前,数据开头是
-    # 2 项 (B,G,R,A) 调色板 —— 与图标同为 lv_bin_decoder 对索引格式的约定,
-    # 见 decode_indexed_line。整张 8 + 288 = 296 字节,原 RGB565 是 4608。
-    bg_palette = [(0, 0, 0, 0), (*BG_HEART, BG_HEART_ALPHA)]
-    bg_bits = bytearray()
+    # 底纹用 **A8**(每像素 1 字节的 alpha 遮罩),颜色由 style 的 bg_image_recolor 给。
+    #
+    # 这不是随便挑的格式,是实测出来的:同一个图案
+    #   * RGB565 不透明(改动前的做法):一屏 240x320 约 104 ms(8 带)
+    #   * I1(调色板 + 透明项):一屏约 400 ms —— 每带 45~56 ms,慢 4 倍
+    #   * A8:走 lv_draw_sw_img.c 里 `cf == LV_COLOR_FORMAT_A8` 那条"把整张图当遮罩、
+    #     用 recolor 颜色填充"的快路径,每像素只读 1 字节,不查调色板、不转 ARGB8888。
+    # 索引图那条慢在解码:LV_BIN_DECODER_RAM_LOAD 没开时它是**逐行**解成 ARGB8888
+    # 再混合,平铺时每带要把上百行各解一遍。
+    bg_alpha = bytearray()
     for row in tile:
-        for x in range(0, BG_TILE_PX, 8):
-            byte = 0
-            for bit in range(8):
-                if row[x + bit][3] != 0:
-                    byte |= 0x80 >> bit
-            bg_bits.append(byte)
+        for px in row:
+            bg_alpha.append(BG_HEART_ALPHA if px[3] else 0)
 
-    bg_row_bytes = BG_TILE_PX // 8
-    c_lines.append(
-        f"static const uint8_t bg_tile_data[{len(bg_palette) * 4 + len(bg_bits)}] = {{")
-    for i, (r, g, b, a) in enumerate(bg_palette):
-        c_lines.append(f"    /* pal{i} */ 0x{b:02X}, 0x{g:02X}, 0x{r:02X}, 0x{a:02X},")
-    for off in range(0, len(bg_bits), bg_row_bytes):
+    c_lines.append(f"static const uint8_t bg_tile_data[{BG_TILE_PX * BG_TILE_PX}] = {{")
+    for off in range(0, len(bg_alpha), BG_TILE_PX):
         c_lines.append("    " + ", ".join(
-            f"0x{v:02X}" for v in bg_bits[off:off + bg_row_bytes]) + ",")
+            f"0x{v:02X}" for v in bg_alpha[off:off + BG_TILE_PX]) + ",")
     c_lines += [
         "};",
         "",
         "static const lv_image_dsc_t bg_tile = {",
-        "    .header = { .cf = LV_COLOR_FORMAT_I1,",
-        f"                .w = {BG_TILE_PX}, .h = {BG_TILE_PX}, .stride = {BG_TILE_PX} / 8 }},",
+        "    .header = { .cf = LV_COLOR_FORMAT_A8,",
+        f"                .w = {BG_TILE_PX}, .h = {BG_TILE_PX}, .stride = {BG_TILE_PX} }},",
         "    .data_size = sizeof(bg_tile_data),",
         "    .data = (const uint8_t *)bg_tile_data,",
         "};",

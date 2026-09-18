@@ -1007,9 +1007,14 @@ static void render(void)
 
     s_scr = ui_pixel_plain(NULL);
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(COL_PINK), 0);
-    // 与后台网页、素材生成脚本共用同一张爱心底纹。
+    // 与后台网页、素材生成脚本共用同一张爱心底纹。那张图是 A8(只有透明度)、
+    // 没有颜色,所以颜色由 recolor 给:白色 + 满不透明度 = "白心上叠着图里的 30% alpha"。
+    // 这条路径也是实测最快的:同样一张图换成索引格式(I1)后每带慢 4 倍,
+    // 详细数字见 assets/images/love_pixel_art_gen.py 里 bg_tile_data 的注释。
     lv_obj_set_style_bg_image_src(s_scr, love_pixel_bg_tile(), 0);
     lv_obj_set_style_bg_image_tiled(s_scr, true, 0);
+    lv_obj_set_style_bg_image_recolor(s_scr, lv_color_white(), 0);
+    lv_obj_set_style_bg_image_recolor_opa(s_scr, LV_OPA_COVER, 0);
 
     love_date_t today = { 0, 0, 0 };
     bool holds = time_today(&today);

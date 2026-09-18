@@ -184,12 +184,21 @@ Store reusable source images and generated display assets in `images/`.
   (`icon_v4_to_v5()` in `main/love_config.c`, covered by a host test).
 - Generated output:
   - `images/love_pixel_art.c` and `main/love_pixel_art.h`: eighteen 40×40 4 bpp
-    indexed (I4) icons (the 20×20 grid scaled 2×), a 48×48 I1 heart background
+    indexed (I4) icons (the 20×20 grid scaled 2×), a 48×48 A8 heart background
     tile, and `love_pixel_palette[16]`.
-  - The tile **draws hearts only, never a background**: it has just two colours,
-    white (index 1) and transparent (index 0), so it packs into 1 bpp — 296 bytes
-    including the palette, against 4,608 bytes for the old RGB565 version. The
-    background colour comes through at runtime from the **screen style's
+  - The tile **draws hearts only, never a background**, and it carries only the
+    opacity of the pattern, so it is stored as **A8** (one alpha byte per pixel,
+    **2,304 bytes**); the colour comes from `bg_image_recolor` (white, opaque) in
+    `main/love_app.c`, which draws a white heart at the tile's own 30% alpha.
+    The old RGB565 version was 4,608 bytes. **Why not the smaller I1**: tried,
+    and a full screen went from 104 ms to **396 ms** (45-56 ms per band). With
+    `LV_BIN_DECODER_RAM_LOAD` off, an indexed image is decoded row by row into
+    ARGB8888 and blended, so tiling re-decodes hundreds of rows per band; A8 takes
+    the `cf == LV_COLOR_FORMAT_A8` path in `lv_draw_sw_img.c` that treats the
+    whole image as a mask and fills with the recolor colour, reading one byte per
+    pixel. Measured on one board, 240x40 buffer, 8 bands: RGB565 104 ms,
+    A8 103 ms, I1 396 ms.
+    The background colour still comes at runtime from the **screen style's
     `bg_color`** (on the web side, `background-color` on `body` and `.screen`; see
     `render()` in `main/love_app.c` and `--pink` in `assets/web/admin.css`), so
     changing it is a one-value edit that needs neither regenerating the art nor
@@ -274,7 +283,7 @@ Store reusable source images and generated display assets in `images/`.
   text, which must stay with the art. The heart background tile is original artwork
   for this repository and uses the repository license.
 - Cost: about 119 KB of source and 18 KB of Flash for icons, tile and palette
-  (15.2 KB icons — eighteen 864-byte I4 images — plus a 296-byte tile); I4 icons are
+  (15.2 KB icons — eighteen 864-byte I4 images — plus a 2,304-byte tile); I4 icons are
   converted row by row while drawing and are never cached as a full screen.
 
 ### Lunar calendar table (love_lunar_table)

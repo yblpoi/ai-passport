@@ -149,30 +149,42 @@ Store reusable source images and generated display assets in `images/`.
 
 ### Commemorative-day pixel art (love_pixel_art)
 
-- Source: `images/love_pixel_art_gen.py` (8×8 pixel masks plus a palette, no
-- All sixteen icons were redrawn on 2026-09-18 into one consistent style (a single
-  dark pixel of outline, flat colours, symmetric silhouettes), so that each of them
-  reads at a glance at 40 px. Before that, the bird was a yellow blob, the rabbit
-  looked like a cup, the dog's ears looked like horns, the tree's trunk sat in the
-  middle of the foliage, the star read as a fat plus with two legs, and the flower,
-  cake, ring and balloon were all ambiguous. The masks were laid out on the 8x8 grid
-  by hand from a design sheet produced with an AI image generator - the generator's
-  own "pixels" do not land on a real grid and its outlines are hairlines, so its
-  output cannot be downsampled into this format. It went in two passes: the four that
-  did not read at all first (bird, dog, rabbit, tree), then the other twelve once the
-  style was settled. The **star is a plump five-pointed star**, shaped after the star emoji: a top
-  point, two arms and two legs. Earlier attempts drew a four-point sparkle and a
-  "thin" star with a narrow waist; both were rejected. It is the one icon here
-  **without** the dark outline: an 8x8 star needs its five points to reach the
-  canvas edge to stay plump, and insetting it by a pixel to fit an outline
-  degrades it into "a fat plus with two legs". Giving the rim the orange palette
-  entry instead was tried too and read as a smeared gradient.
+- Source: `images/emoji/` — sixteen Twemoji graphics, vendored as 72×72 PNGs with
+  the CC-BY 4.0 graphics license text (`LICENSE-GRAPHICS.txt`) and a `manifest.json`
+  that pins the upstream tag (v16.0.0), the file names, the code points and a sha256
+  per file. `images/fetch_emoji.py` fetches them (fixed tag, sha256 verified, exits
+  non-zero on any mismatch); it is a maintenance script and takes no part in the
+  build.
+- From art to icon: `images/love_pixel_art_gen.py` (no third-party dependencies)
+  trims each graphic's transparent margin, scales it **proportionally** to a 20×20
+  logical grid, centres it there, and then scales that grid 2× to the 40 px the
+  display shows — two screen pixels per logical pixel, which is what keeps the
+  pixel structure visible on the 240×320 panel. Every output cell takes the
+  alpha-weighted vote of the source pixels it covers — the dominant colour, not an
+  average, so the result stays hard-edged pixel art instead of a blurry
+  low-resolution vector. Proportional scaling is not a preference: the trimmed
+  boxes run from 38×72 (balloon) to 72×72 (cake), so filling both axes would
+  stretch the balloon almost 2×.
+- This replaced the hand-drawn masks of 2026-09-18. Those could not be produced
+  reliably — the design sheets came from an AI image generator whose "pixels" do
+  not land on a real grid, so its output cannot be downsampled into this format,
+  and every revision had to be laid out by hand on the 8×8 grid. The pixel-art
+  style now comes from the source art's own shapes, sampled onto a real grid.
 - The icon **order must not change**: `LOVE_ICON_*` indices are stored in the user's
-  configuration, so reordering would silently change their icons.
+  configuration, so reordering would silently change their icons. The historical
+  slot names are kept even where the art changed: slot 9 is still `LOVE_ICON_MOON`
+  and now holds a moon cake, slot 14 is still `LOVE_ICON_LEAF` and now holds a
+  smiling face with hearts.
 - Generated output:
   - `images/love_pixel_art.c` and `main/love_pixel_art.h`: sixteen 40×40 4 bpp
-    indexed (I4) icons (masks scaled 5× — only integer factors avoid half pixels),
-    a 48×48 RGB565 heart background tile, and `love_pixel_palette[16]`.
+    indexed (I4) icons (the 20×20 grid scaled 2×), a 48×48 RGB565 heart background
+    tile, and `love_pixel_palette[16]`.
+  - Each icon carries **its own** 16-colour palette: the union of the sixteen
+    graphics' colours is far past sixteen entries, and the `lv_bin_decoder`
+    convention already puts the palette at the head of each image's data. An icon
+    that ever needs more than 15 opaque colours fails the generator loudly in
+    `per_icon_palette()` rather than losing colours silently; the busiest of the
+    sixteen (the tree) uses 8.
   - The icons are I4 rather than ARGB8888: a 16-colour palette is embedded at the
     head of each icon's data (as `lv_color32_t`, memory order B,G,R,A), followed by
     the indices, two pixels per byte, high nibble first. That is the
@@ -180,8 +192,9 @@ Store reusable source images and generated display assets in `images/`.
     so `LV_BIN_DECODER_RAM_LOAD` is not needed and rows are converted on demand
     while drawing. Index 0 of the per-icon palette is fixed to transparent (the
     icons are hollow), which is a separate table from the avatar palette below.
-  - `images/web/`: PNGs exported from the same masks, `icons.json`/`assets.json`
-    data URIs, the palette (`palette` field), and `contact-sheet.png` for manual
+  - `images/web/`: PNGs exported from the same grids, `icons.json`/`assets.json`
+    data URIs, the palette (`palette` field), and `contact-sheet.png` plus
+    `contact-sheet-zoom.png` (3× nearest-neighbour on a checkerboard) for manual
     review, all used by the admin page.
 - The palette order is the 4 bpp index order for uploaded custom avatars
   (`PALETTE_ORDER`). **Changing it recolors every avatar already uploaded**, so it
@@ -192,41 +205,45 @@ Store reusable source images and generated display assets in `images/`.
   `main/ui_pixel_math.c`, and a host test pins the four corners as **exact mirrors**
   of each other -- an earlier version used a negative value as a "not in a corner"
   sentinel, and only the bottom-right corner ended up rounded.
-  A **circular** chip is still rejected: measured, a circle clips solid pixels off
-  15 of the 16 characters (the cat loses 186, the gift 284).
+  A **circular** chip is still rejected for the same reason: the built-in icons are
+  shapes, not tiles, and a circle would clip whichever of them reaches the edge.
   **Why the built-in icons are not rounded:** they are *shapes* on a transparent
-  background, not square tiles, and eight of them do reach the canvas corners --
-  the cat, dog, bear and fox at their two top corners, the star, cake and gift at
-  their two bottom corners, and the leaf at one of each. A 4 px radius nicks 6
-  outline pixels off each of those, 48 pixels in total (0.19% of all icon pixels).
-  Shrinking the icons so the rounding only lands on empty space does not help:
-  the rounding then falls on transparent pixels, so it is invisible and the only
-  visible change is that the icons got smaller -- and preserving the pixel grid
-  means dropping the 8x8 mask from 5x to 4x, which is 20% smaller. For a shape the
-  choice is only "leave it alone" or "nick it", so it is left alone.
+  background, not square photos. Measured on the sixteen generated grids, only the
+  cat's two top corners touch the canvas edge at all; a 4 px radius would nick
+  those and leave the rest untouched, so the rule would apply inconsistently to
+  exactly the one icon that needs its corners. For a shape the choice is only
+  "leave it alone" or "nick it", so it is left alone — and the rounding rule stays
+  a property of *custom avatars*, which are full-bleed photos.
   Both sides agree: `assets/web/admin.css` rounds only custom-avatar images
-  (`img.rounded`; rounding the icons there would nick the same outlines), and the
-  device points custom-avatar corners at a transparent palette index while packing
-  the image as I4, using the same `ui_pixel_corner_cut()` mask (the avatar palette
-  has no transparent entry of its own, so one unused index is given alpha 0).
+  (`img.rounded`), and the device points custom-avatar corners at a transparent
+  palette index while packing the image as I4, using the same
+  `ui_pixel_corner_cut()` mask (the avatar palette has no transparent entry of its
+  own, so one unused index is given alpha 0).
 - Conversion steps: run `python3 assets/images/love_pixel_art_gen.py` from the
-  repository root. Re-running after a mask change updates device and web assets
-  together.
+  repository root. It reads `images/emoji/*.png`, so swapping an icon means editing
+  the `EMOJI` list in the generator (name, label, code point); changing the art
+  itself also means updating `images/fetch_emoji.py` and re-vendoring. Then re-run
+  `python3 tools/gen_admin_page.py` to fold the new web assets into
+  `main/love_admin_page.h` and `main/love_web_assets.h`.
 - Destination: `assets/images/love_pixel_art.c` is compiled through
   `target_sources` in `main/CMakeLists.txt`; `tools/gen_admin_page.py` writes the
   web assets into `main/love_web_assets.h` (the raw background-tile PNG plus the page
   icon, served by `/bg.png` and by `/favicon.ico` and `/apple-touch-icon*.png`) and
   `main/love_admin_page.h` (HTML/CSS/JS, served as `/`, `/admin.css` and `/admin.js`).
 - The web icons are **inlined into `admin.js`** as data URIs rather than served as
-  `/icon/N.png`: all sixteen are only 2,641 bytes, and splitting them into separate
-  requests makes a single page load open a dozen extra connections, squeezing the
-  device heap until the Wi-Fi driver cannot allocate a transmit frame. The 167 KB
-  pixel font, not the icons, was what made the page unloadable, and it is gone.
-- License: the icons and tile are original artwork for this repository and use
-  the repository license.
-- Cost: about 111 KB of source and roughly 18 KB of Flash for icons, tile and
-  palette (13.8 KB icons, 4.6 KB tile); I4 icons are converted row by row while
-  drawing and are never cached as a full screen.
+  `/icon/N.png`: all sixteen are 3,949 bytes as PNGs (5,644 bytes as data URIs),
+  and splitting them into separate requests makes a single page load open a dozen
+  extra connections, squeezing the device heap until the Wi-Fi driver cannot
+  allocate a transmit frame. The 167 KB pixel font, not the icons, was what made
+  the page unloadable, and it is gone.
+- License: the icons are **Twemoji graphics** (https://github.com/jdecked/twemoji,
+  tag v16.0.0), pixelated as described above and therefore derivative works that
+  remain under **CC-BY 4.0** — see `images/emoji/LICENSE-GRAPHICS.txt` for the full
+  text, which must stay with the art. The heart background tile is original artwork
+  for this repository and uses the repository license.
+- Cost: about 112 KB of source and 18 KB of Flash for icons, tile and palette
+  (13.8 KB icons — sixteen 864-byte I4 images — plus a 4.6 KB tile); I4 icons are
+  converted row by row while drawing and are never cached as a full screen.
 
 ### Lunar calendar table (love_lunar_table)
 

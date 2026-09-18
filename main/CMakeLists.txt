@@ -7,6 +7,7 @@ idf_component_register(
          "love_date.c"
          "love_event_order.c"
          "love_view.c"
+         "love_key.c"
          "love_config.c"
          "love_lunar.c"
          "love_store.c"

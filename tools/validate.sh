@@ -57,7 +57,13 @@ run_static_checks() (
     run_host_test test_bsp_es8311_sleep_check components/bsp/src \
         components/bsp/src/bsp_es8311_sleep_check.c
 
-    # 下面三个要多个 -I 目录(或额外源码),run_host_test 只收一个,所以展开写。
+    # 下面四个要多个 -I 目录(或额外源码),run_host_test 只收一个,所以展开写。
+    # 按键意图表:熄屏时按下(PRESS)不算动作、判定事件只负责亮屏 —— 真机上踩过的坑:
+    # 一次物理按键会发 PRESS + CLICK 两个事件,PRESS 亮了屏,CLICK 就把页面翻了。
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+        -Itests/bsp_stubs -Icomponents/bsp/include -Imain \
+        tests/test_love_key.c main/love_key.c -o "${test_dir}/test_love_key"
+    "${test_dir}/test_love_key"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
         -Itests/bsp_stubs -Icomponents/bsp/include \
         tests/test_bsp_button.c -o "${test_dir}/test_bsp_button"

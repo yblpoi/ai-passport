@@ -2,7 +2,7 @@
   {
     "id": "bird",
     "label": "小鸟",
-    "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAaUlEQVR42u3YsQnAIBAFULdImzJkiAydbTKNDqCkMAdqeB9+KT4LES8lEYnJtp+5t4CAvwO2NsnP0d1wNCDgKsAvB2muva+qgIBLA6NvNiAgYNTzBwg4GhiNnv4jBQg4etow/UgOEPAlBdFRZ1bzlGHgAAAAAElFTkSuQmCC"
+    "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAaklEQVR42u3XsQkAIAxE0WxhaykO4dBu4zS6QIpAQiTwD65UXyNREUJITFqfN7IAAZYGahveM0LrQgMEmAm0YjxozxkAAZYBqt3LVs/NBgiwNDBj/AEE+BvIgxUgwKDPvDbCMtYCBPgb+AD07rtad45UmwAAAABJRU5ErkJggg=="
   },
   {
     "id": "cat",
@@ -12,12 +12,12 @@
   {
     "id": "dog",
     "label": "狗狗",
-    "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAdklEQVR42u3YsQnAIBBGYbdImzqt22SkTOQqmSRl7EXIwX+YO3jCq++zEbyy7cc7Vn46UwtAgBGBs66zumadCxBgSKA3RkEDBJgGqFxEmQEQYBogzwxAgB/A526uAQSYBmj94StoCQMQYESgFa20ZHcHEKADsAPFN+lyuT26YAAAAABJRU5ErkJggg=="
+    "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAdklEQVR42u3UsQ2AMAxEUW+RlpqWbRiJiViFSShJH0XC0hkSS/+ka+3nxlaW9Wl77Jur5ox3Xs9iAAHOCFTQCgYgwDTAaMywNwMQ4J9A5RBlB0CAaYC8GYAAX4D3dYYWIMA0wF6i0RIGIMAZgV60UosOQIAfASshYroZd+tQSwAAAABJRU5ErkJggg=="
   },
   {
     "id": "rabbit",
     "label": "兔子",
-    "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAXklEQVR42u3UsQ3AIAwEQG+RNnX2nyo1fRggFJZAUYB76UvbVzmikeO8nkwjmdH7AAF/CSzlfjV7ODsLCLgcsKeAgFsAvRlAQG8GEDA+QQ/HAALOAuwpIOByQJFdUwHURix3up3JeQAAAABJRU5ErkJggg=="
+    "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAfklEQVR42u3YsQ2AMAxE0WxBS826tCzJBDAAV5xkE8fSP8llnJcikZUxRLb9eJwaZrL7AQS4JPA+r0+5G7trAQJsDVRxge5agACXBLoNZ0SiAQLsAowcJHSzAQLsAlRRc56qsmcGIMAMYNUINmVgBQjwL2DkCy39qw0gwGLgC0yHfsHx8M1nAAAAAElFTkSuQmCC"
   },
   {
     "id": "bear",
@@ -77,6 +77,6 @@
   {
     "id": "tree",
     "label": "圣诞树",
-    "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAgUlEQVR42u3YMQqAMAyF4dzC1VEEcXD0Jh7H0UN5D3fvUffaQUxIo/wP3lboNzWkIoqko0t5JVIAAvRM0/YpbwlYOgcQ4O+ApUvWfXhdczRAgJ5ADeacx1vN0QABRgTWKkCAnwFqxlqoZwYgQCYJQIAOQM3usi3To1b7bQAI0AB4AdZwR5m35ci9AAAAAElFTkSuQmCC"
+    "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAeklEQVR42u3WsQ2AQAxD0WxBS4mQqNjmxqFkKPZgmrBAikjhnOZbcn2vOStmhSzr7plaVwACVAKjh/3dUpWgAQLsBka5nsMzbZsZgACVwOgnZoFtMwMQ4CxgBSNBAwSoBCowJTRAgN1AZgYgwIkn2D3OVNsOVoAAfwB+NFohnJRV/XQAAAAASUVORK5CYII="
   }
 ]

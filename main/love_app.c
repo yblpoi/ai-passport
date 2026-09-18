@@ -1337,17 +1337,31 @@ esp_err_t love_app_set_ble(bool on)
     const esp_err_t err = ble_apply(on);
     if (err != ESP_OK) return err;
 
+    // 落盘要走 NVS(慢),所以放锁外;但**不能**在锁外读 s_cfg —— on_config_changed 会在
+    // 锁内整体替换它,锁外读会拿到"新的事件表配旧的档位"这种半新半旧的一份,存下去就把
+    // 用户刚在网页上改的东西抹掉。先在锁内拷一份到堆(这份配置放不进任务栈,见本文件的
+    // 栈说明),再拿副本去存 —— 与 ACT_BLANK_OFF 同一套写法。
+    love_config_t *snapshot = malloc(sizeof(*snapshot));
+    bool save = false;
     if (bsp_lvgl_lock(300)) {
         const uint8_t value = on ? 1 : 0;
-        const bool changed = s_cfg.ble_enabled != value;
+        // 只有真的变了才写 NVS:空闲自动关每关一次就写一遍没有必要。
+        save = (s_cfg.ble_enabled != value);
         s_cfg.ble_enabled = value;
+        if (save && snapshot) *snapshot = s_cfg;
         render();
         bsp_lvgl_unlock();
-        // 只有真的变了才写 NVS:空闲自动关每关一次就写一遍没有必要。
-        if (changed && love_store_save_config(&s_cfg) != ESP_OK) {
-            ESP_LOGW(TAG, "蓝牙开关保存失败");
+    }
+    if (save) {
+        if (snapshot) {
+            if (love_store_save_config(snapshot) != ESP_OK) {
+                ESP_LOGW(TAG, "蓝牙开关保存失败");
+            }
+        } else {
+            ESP_LOGW(TAG, "蓝牙开关没落盘(内存不足)");
         }
     }
+    free(snapshot);
     return ESP_OK;
 }
 

@@ -112,6 +112,11 @@ static void migrate_v2(const love_config_v2_t *old, love_config_t *out)
     }
 
     uint8_t count = old->event_count;
+    // v2 的记录里 events 只有 8 个槽位(love_config.h 的 v2 布局,冻死的历史格式)。
+    // 计数是从记录里读出来的,可能被写坏 —— 不先按 8 钳一次的话,下面那个循环会读到
+    // 结构体尾部之外(最多 16 × 32 = 512 字节的栈),并对没有 NUL 保证的内存做 strlen。
+    // 8 与上面的 16 一样属于历史格式的一部分,不能写成当前常量。
+    if (count > 8) count = 8;
     if (count > LOVE_EVENT_MAX) count = LOVE_EVENT_MAX;
     out->event_count = count;
 

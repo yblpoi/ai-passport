@@ -99,6 +99,41 @@ static void test_migrate_v2_to_current(void)
     assert(now.events[LOVE_EVENT_MAX - 1].name[0] == '\0');
 }
 
+// v2 记录的 events 只有 8 个槽位(love_config.h 的冻结布局),而 event_count 是从记录里
+// 读出来的、可能被写坏。修复前这段迁移会按 24 去读结构体尾部之外的内存,还把那片没有
+// NUL 保证的字节当字符串 strcpy 出来。这条用例钉两件事:计数被夹回 8,以及第 9 条起
+// 仍是调用方铺的默认值 —— 也就是"没有越界读进来任何东西"。
+static void test_migrate_v2_overlong_event_count_is_clamped(void)
+{
+    love_config_v2_record_t old;
+    memset(&old, 0, sizeof(old));
+    old.version = 2u;
+    old.config.start = (love_date_t){ 2025, 1, 1 };
+    old.config.event_count = 24;      // 记录里只有 8 个槽位,这个数不可能合法
+    for (int i = 0; i < 8; i++) {
+        snprintf(old.config.events[i].name, sizeof(old.config.events[i].name),
+                 "事件%d", i + 1);
+        old.config.events[i].icon = (uint8_t)i;
+        old.config.events[i].kind = 0;
+        old.config.events[i].date = (love_date_t){ 2025, 1, 1 };
+    }
+
+    love_config_t now;
+    seed_defaults(&now);
+    assert(love_config_from_record(&old, sizeof(old), &now) == true);
+
+    assert(now.event_count == 8);     // v2 装不下第九条
+    for (int i = 0; i < 8; i++) {
+        char expected[16];
+        snprintf(expected, sizeof(expected), "事件%d", i + 1);
+        assert(strcmp(now.events[i].name, expected) == 0);
+    }
+    // 越界读的哨兵:第 9 条起一个字节都不该被动过
+    for (size_t i = 8; i < LOVE_EVENT_MAX; i++) {
+        assert(now.events[i].name[0] == '\0');
+    }
+}
+
 // v3 -> 当前:字段基本一一对应,唯一要小心的是 v3 的**全局**展示模式要摊到每条事件上
 // (v4 起是每条自己带),否则升级后用户看到的屏会突然从列表变成单页。
 static void test_migrate_v3_to_current(void)
@@ -333,6 +368,7 @@ static void test_sanitize_clamps_everything(void)
 int main(void)
 {
     test_migrate_v2_to_current();
+    test_migrate_v2_overlong_event_count_is_clamped();
     test_migrate_v3_to_current();
     test_migrate_v3_single_page_stays_single();
     test_migrate_v4_to_v5();

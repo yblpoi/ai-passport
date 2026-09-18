@@ -193,10 +193,11 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         static wifi_ap_record_t records[LOVE_NET_SCAN_MAX];
         memset(records, 0, sizeof(records));
         uint16_t count = LOVE_NET_SCAN_MAX;
-        uint16_t total = 0;
         lock();
-        if (esp_wifi_scan_get_ap_num(&total) == ESP_OK &&
-            esp_wifi_scan_get_ap_records(&count, records) == ESP_OK) {
+        // 条件里只看 get_ap_records 的返回值。它同时是**释放驱动那份扫描结果内存**的
+        // 调用,而 get_ap_num 只是把一个我们从没读过的总数写出来 —— 原先把它串在
+        // `&&` 前面,它一旦失败就会连记录一起跳过,驱动那 1~3KB 扫描结果也就没人释放。
+        if (esp_wifi_scan_get_ap_records(&count, records) == ESP_OK) {
             if (count > LOVE_NET_SCAN_MAX) count = LOVE_NET_SCAN_MAX;
             for (uint16_t i = 0; i < count; i++) {
                 snprintf(s_scan[i].ssid, sizeof(s_scan[i].ssid), "%s",

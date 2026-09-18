@@ -1509,7 +1509,14 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     case ACT_BLE_TOGGLE: {
         // love_ble_stop() 要等 NimBLE host 任务退出,必须在 LVGL 锁外调用;
         // 这段 switch 本来就是"慢操作",放在锁外执行。
-        const bool want = !s_cfg.ble_enabled;
+        // 但"现在蓝牙是开是关"必须**在锁内**读一眼:s_cfg 会被 on_config_changed 在
+        // 锁内整体替换,锁外读到的可能是替换到一半的值(读着开、实际已经关了)。
+        bool open_now = false;
+        if (!bsp_lvgl_lock(300)) break;
+        open_now = s_cfg.ble_enabled != 0;
+        bsp_lvgl_unlock();
+
+        const bool want = !open_now;
         const esp_err_t err = love_app_set_ble(want);
         if (bsp_lvgl_lock(300)) {
             set_note(err == ESP_OK ? (want ? "蓝牙已打开" : "蓝牙已关闭")
@@ -1536,20 +1543,32 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         }
         break;
     }
-    case ACT_BLANK_OFF:
+    case ACT_BLANK_OFF: {
+        // 落盘要走 NVS(慢),所以放锁外;但**不能**在锁外直接读 s_cfg —— on_config_changed
+        // 会在锁内整体替换它(1454 字节),锁外读会拿到半新半旧的一份,写进 NVS 就是
+        // "新的事件表配旧的档位"。先在锁内拷一份到堆(这份配置放不进任务栈,见本文件的
+        // 栈说明),再拿副本去存。
+        love_config_t *snapshot = malloc(sizeof(*snapshot));
         if (bsp_lvgl_lock(300)) {
             blank_off_index_step(1);
             // 改档位本身就是一次操作,重置计时,免得刚选完就黑屏。
             note_input();
             screen_wake();
             set_note(LOVE_BLANK_OFF_SECONDS[blank_off_index()] == 0 ? "已设为常亮" : "已更新熄屏时间");
+            if (snapshot) *snapshot = s_cfg;
             render();
             bsp_lvgl_unlock();
         }
-        if (love_store_save_config(&s_cfg) != ESP_OK) {
-            ESP_LOGW(TAG, "熄屏设置保存失败");
+        if (snapshot) {
+            if (love_store_save_config(snapshot) != ESP_OK) {
+                ESP_LOGW(TAG, "熄屏设置保存失败");
+            }
+            free(snapshot);
+        } else {
+            ESP_LOGW(TAG, "熄屏档位没落盘(内存不足)");
         }
         break;
+    }
     case ACT_STATUS:
         if (bsp_lvgl_lock(300)) {
             s_sel = 0;

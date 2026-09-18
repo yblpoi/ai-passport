@@ -54,6 +54,12 @@ typedef struct {
     love_config_t config;
 } love_config_record_t;
 
+// config 必须紧跟版本号:love_config_from_record() 靠这个偏移**只**把 config 那一段
+// 搬进调用方的结构,而不是把整条记录(1460 字节)先摆到栈上 —— 那曾是对应任务栈上
+// 最深的一帧。偏移同时是落盘格式的一部分,动它就要升版本并写迁移。
+_Static_assert(offsetof(love_config_record_t, config) == sizeof(uint32_t),
+               "config 必须紧跟在 version 之后");
+
 // v2 的布局**冻结**在这里。字段类型与顺序必须保持当年的样子,所以 name 的长度直接写 25,
 // 不能用 LOVE_NAME_MAX —— 以后改常量不能篡改"历史格式",否则老设备的记录会被读错。
 typedef struct {

@@ -171,15 +171,18 @@ static void migrate_v3(const love_config_v3_t *old, love_config_t *out)
 
 // v4 记录 -> v5:两版的结构布局完全相同,差别只在图标的取值范围 —— 见上面的
 // icon_v4_to_v5():把头像槽的编号挪两位,内置图标原样保留。
-static void migrate_v4(const love_config_t *old, love_config_t *out)
+//
+// **就地做**(不经过一份中间的 love_config_t):这条路径每次 load 配置都会走,而
+// 一份 love_config_t 是 1454 字节 —— 原来 love_config_from_record() 会先把整条记录
+// (1460 字节)memcpy 到栈上再调这里,那一下就是控制台任务 4KB 栈上最深的一段
+// (`status` → print_event_order → love_store_load_config 那条路实测只剩 560 字节)。
+static void migrate_v4_in_place(love_config_t *cfg)
 {
-    *out = *old;                     // 两版逐字段布局相同
-
     for (size_t i = 0; i < LOVE_PERSON_MAX; i++) {
-        out->people[i].icon = icon_v4_to_v5(out->people[i].icon);
+        cfg->people[i].icon = icon_v4_to_v5(cfg->people[i].icon);
     }
     for (size_t i = 0; i < LOVE_EVENT_MAX; i++) {
-        out->events[i].icon = icon_v4_to_v5(out->events[i].icon);
+        cfg->events[i].icon = icon_v4_to_v5(cfg->events[i].icon);
     }
 }
 
@@ -190,19 +193,22 @@ bool love_config_from_record(const void *blob, size_t size, love_config_t *out)
     uint32_t version = 0;
     memcpy(&version, blob, sizeof(version));   // 版本号是首字段,任何版本都能先读出来
 
-    // memcpy 进局部结构再用,不直接往 blob 上套结构体指针:nvs 给的缓冲不保证对齐。
+    // 当前版本与 v4 的记录都只有"config 前面多一个版本号"这一处包装,所以只把 config
+    // 那一段搬出来即可。**不要**把整条记录先摆到栈上:那会多占 sizeof(love_config_t)
+    // 字节的栈,而这就是调用方任务栈上最深的一帧(console 4KB、httpd 6KB 都会走这里)。
+    // 逐段 memcpy 而不是往 blob 上套结构体指针:nvs 给的缓冲不保证对齐。
+    const unsigned char *config_bytes =
+        (const unsigned char *)blob + offsetof(love_config_record_t, config);
+
     if (version == LOVE_CONFIG_VERSION && size == sizeof(love_config_record_t)) {
-        love_config_record_t record;
-        memcpy(&record, blob, sizeof(record));
-        *out = record.config;
+        memcpy(out, config_bytes, sizeof(*out));
         return true;
     }
 
-    // v4 与 v5 的结构布局相同,只有图标的取值范围变了(见 migrate_v4)。
+    // v4 与 v5 的结构布局相同,只有图标的取值范围变了(见 migrate_v4_in_place)。
     if (version == 4u && size == sizeof(love_config_record_t)) {
-        love_config_record_t record;
-        memcpy(&record, blob, sizeof(record));
-        migrate_v4(&record.config, out);
+        memcpy(out, config_bytes, sizeof(*out));
+        migrate_v4_in_place(out);
         return true;
     }
 

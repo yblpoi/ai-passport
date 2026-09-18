@@ -44,15 +44,27 @@ pixel heart wallpaper. Only these three sizes are allowed.
   `adv_w` and `box_w/h` scale exactly at 12/24/36/48; a non-integer factor makes
   stroke widths uneven and destroys the dot-matrix look. **Do not add a fourth
   size.**
-- Character range: ASCII 0x20–0x7E, common CJK punctuation, and the complete
-  GB2312 level-1 Han set — **3890 characters**. An earlier build took the font
-  straight from Ark Pixel Font, whose cmap is missing 172 level-1 characters,
-  including everyday ones such as the characters for "hot", "execute", "love",
-  "fate", "however", "window", "tight", "police" and "medicine". Those had no
-  glyph anywhere, so LVGL drew placeholder boxes; a custom name containing one
-  would have shown a box too. Regenerating from Fusion Pixel Font adds exactly
-  those 172 glyphs and leaves all 3718 existing glyphs byte-identical, so no text
-  moved or changed shape.
+- Character range: ASCII 0x20–0x7E, common CJK punctuation, the complete GB2312
+  level-1 Han set (3755), the GB2312 level-2 set (3008), and ten given-name
+  characters that GB2312 does not have at all (U+73A5, U+5586, U+6607, U+9814,
+  U+73FA, U+5A73, U+71DA, U+579A, U+7287, U+752F) — **6910 requested**. The source
+  font has no glyph for 126 of them (obscure level-2 characters only); the
+  generator skips those silently. The charset is rebuilt with Python's `gb2312`
+  codec rather than a hand-kept list: level 1 is the range with a lead byte of
+  0xB0..0xD7, level 2 is 0xD8..0xF7, and both are enumerated over trail bytes
+  0xA1..0xFE.
+- **Why level 2 is included:** level 1 does not contain the given-name characters
+  that show up in real names — the ones for "graceful", "prosperous", "joyful" and
+  "pretty" are level 2 (U+5A77 = 0xE6C3, U+946B = 0xF6CE), and a few, such as
+  U+73A5 and U+6607, are not in GB2312 at all. With only level 1 in the font,
+  LVGL fell back to `LV_USE_FONT_PLACEHOLDER` and drew a full-line-height solid
+  block where the character should be.
+- An earlier build took the font straight from Ark Pixel Font, whose cmap is
+  missing 172 level-1 characters, including everyday ones such as the characters
+  for "hot", "execute", "love", "fate", "however", "window", "tight", "police" and
+  "medicine". Those had no glyph anywhere, so LVGL drew placeholder boxes.
+  Regenerating from Fusion Pixel Font adds exactly those 172 glyphs (they are still
+  present).
 - Conversion command (repository root, `lv_font_conv` 1.5.3):
 
   ```bash
@@ -74,9 +86,11 @@ pixel heart wallpaper. Only these three sizes are allowed.
   through `target_sources` in `main/CMakeLists.txt`. The application uses
   `LV_FONT_DECLARE` and keeps writable copies whose fallback points at Montserrat
   to cover missing glyphs and LVGL symbols.
-- Cost: about 363 KB of Flash altogether (12 px 98 KB, 24 px 264 KB, 36 px 1 KB;
-  1 bpp, uncompressed), read-only, not resident in internal RAM. The 172 added
-  level-1 glyphs account for roughly 17 KB of that.
+- Cost: about 634 KB of Flash altogether (12 px 170 KB, 24 px 462 KB, 36 px 1 KB,
+  measured from the map file; 1 bpp, uncompressed), read-only, not resident in
+  internal RAM. Extending the charset from level 1 to level 2 grew both files by
+  about 271 KB in the application image; the 4 MB factory partition leaves ~74 %
+  free after that.
 - Generate and register additional sizes separately instead of switching to a
   full CJK family to add a single character.
 - Note: the generated files carry an `Opts:` header comment holding the absolute

@@ -34,6 +34,14 @@ static void rounded_flush_event(lv_event_t *event)
         uint16_t *row = (uint16_t *)(draw_buf->data +
                                      (y - area->y1) * draw_buf->header.stride);
         for (int32_t x = area->x1; x <= area->x2; ++x) {
+            // Middle columns are inside neither corner square, and the helper can
+            // only return true inside one of them — so skip the call for the
+            // ~75% of columns that can never be masked (same fast path as the
+            // row loop above).
+            if (x >= BSP_LVGL_SCREEN_RADIUS &&
+                x < BSP_LCD_W - BSP_LVGL_SCREEN_RADIUS) {
+                continue;
+            }
             if (bsp_display_pixel_outside_rounded_rect(
                     x, y, BSP_LCD_W, BSP_LCD_H, BSP_LVGL_SCREEN_RADIUS)) {
                 // The port swaps RGB565 bytes after this event; black is 0 in

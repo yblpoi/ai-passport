@@ -146,7 +146,12 @@ esp_err_t bsp_display_init(void) {
         .mosi_io_num = BSP_LCD_MOSI,
         .sclk_io_num = BSP_LCD_SCLK,
         .miso_io_num = -1, .quadwp_io_num = -1, .quadhd_io_num = -1,
-        .max_transfer_sz = BSP_LCD_W * 80 * 2,
+        // 全工程最大的一次 SPI 传输就是 LVGL 那个 240×20 的行缓冲(见
+        // bsp_display_lvgl.c 的 buffer_size),所以按它配,而不是按 80 行配 ——
+        // 这个值直接决定驱动分配的 DMA 描述符链长度(MALLOC_CAP_DMA|INTERNAL,
+        // 本板最紧的那块内存),多配一倍就是白占。96 行/38400 字节没有任何调用方:
+        // esp_lcd 只在单次传输超过这个上限时才切分事务,而这里永远到不了。
+        .max_transfer_sz = BSP_LCD_W * 20 * 2,
     };
     e = spi_bus_initialize(BSP_LCD_SPI_HOST, &bus, SPI_DMA_CH_AUTO);
     if (e != ESP_OK) {
@@ -162,7 +167,10 @@ esp_err_t bsp_display_init(void) {
         .pclk_hz = BSP_LCD_PCLK_HZ,
         .spi_mode = BSP_LCD_SPI_MODE,
         .lcd_cmd_bits = 8, .lcd_param_bits = 8,
-        .trans_queue_depth = 10,
+        // 面板 IO 按这个数一次分配事务描述符数组(每项 48 字节),SPI 驱动还会为
+        // 它建两个同样深度的队列。9600 字节一次传输最多用掉 3 个描述符,配 3 就够;
+        // 原来配 10 是给"更大的传输"留的余量,而上面那条上限已经把它压到 9600。
+        .trans_queue_depth = 3,
     };
     e = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_HOST, &io_cfg, &s_io);
     if (e != ESP_OK) { ESP_LOGE(TAG, "panel_io 创建失败: %s", esp_err_to_name(e)); goto fail; }

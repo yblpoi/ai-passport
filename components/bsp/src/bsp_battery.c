@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdbool.h>
+#include <string.h>
 
 static const char *TAG = "bsp_batt";
 
@@ -52,19 +53,13 @@ static esp_err_t cw_write(uint8_t reg, uint8_t val) {
     return i2c_master_transmit(s_dev, b, 2, 100);
 }
 
-// CONFIG 的低 4 bit 为保留位。复位、睡眠和激活均按芯片规定的时序切换。
-static int cw_enter_sleep(void) {
+// CONFIG 的低 4 bit 为保留位。复位、睡眠和激活均按芯片规定的时序切换:
+// 先写 0x30 复位,20 ms 后写目标档位,再等 10 ms。睡眠与激活只差最后那个字节,
+// 合成一处之后两条路的时序不会再各改各的。
+static int cw_restart_into(uint8_t config) {
     if (cw_write(CW_REG_CONFIG, CW_CONFIG_RESTART) != 0) return -1;
     vTaskDelay(pdMS_TO_TICKS(20));
-    if (cw_write(CW_REG_CONFIG, CW_CONFIG_SLEEP) != 0) return -1;
-    vTaskDelay(pdMS_TO_TICKS(10));
-    return 0;
-}
-
-static int cw_enter_active(void) {
-    if (cw_write(CW_REG_CONFIG, CW_CONFIG_RESTART) != 0) return -1;
-    vTaskDelay(pdMS_TO_TICKS(20));
-    if (cw_write(CW_REG_CONFIG, CW_CONFIG_ACTIVE) != 0) return -1;
+    if (cw_write(CW_REG_CONFIG, config) != 0) return -1;
     vTaskDelay(pdMS_TO_TICKS(10));
     return 0;
 }
@@ -77,10 +72,11 @@ static int cw_profile_matches(bool *matches) {
     if (cw_read(CW_REG_SOC_ALERT, &val, 1) != 0) return -1;
     if ((val & CW_UPDATE_FLAG) == 0) return 0;
 
-    for (size_t i = 0; i < CW_PROFILE_SIZE; i++) {
-        if (cw_read((uint8_t)(CW_REG_PROFILE + i), &val, 1) != 0) return -1;
-        if (val != s_battery_profile[i]) return 0;
-    }
+    // profile 是连续寄存器,一次读完再比。逐字节读要 80 次 I2C 事务(100 kHz 下
+    // 约 25 ms),而每次上电都要走一遍这段检查。
+    uint8_t profile[CW_PROFILE_SIZE];
+    if (cw_read(CW_REG_PROFILE, profile, sizeof(profile)) != 0) return -1;
+    if (memcmp(profile, s_battery_profile, sizeof(profile)) != 0) return 0;
 
     *matches = true;
     return 0;
@@ -89,7 +85,7 @@ static int cw_profile_matches(bool *matches) {
 // Profile 必须在睡眠态逐字节写入，读回校验后置 UPDATE_FLAG，再重启计算。
 static int cw_update_profile(void) {
     uint8_t val = 0;
-    if (cw_enter_sleep() != 0) return -1;
+    if (cw_restart_into(CW_CONFIG_SLEEP) != 0) return -1;
 
     for (size_t i = 0; i < CW_PROFILE_SIZE; i++) {
         if (cw_write((uint8_t)(CW_REG_PROFILE + i), s_battery_profile[i]) != 0) {
@@ -98,18 +94,21 @@ static int cw_update_profile(void) {
         }
     }
 
+    // 读回同样一次读完:写入必须逐字节(芯片要求),校验不必。
+    // 出错时仍要报出是第几个字节不一致,所以比较本身还是逐个来。
+    uint8_t profile[CW_PROFILE_SIZE];
+    if (cw_read(CW_REG_PROFILE, profile, sizeof(profile)) != 0) return -1;
     for (size_t i = 0; i < CW_PROFILE_SIZE; i++) {
-        if (cw_read((uint8_t)(CW_REG_PROFILE + i), &val, 1) != 0) return -1;
-        if (val != s_battery_profile[i]) {
+        if (profile[i] != s_battery_profile[i]) {
             ESP_LOGE(TAG, "profile 校验失败:index=%u expected=0x%02X actual=0x%02X",
-                     (unsigned)i, s_battery_profile[i], val);
+                     (unsigned)i, s_battery_profile[i], profile[i]);
             return -1;
         }
     }
 
     if (cw_read(CW_REG_SOC_ALERT, &val, 1) != 0) return -1;
     if (cw_write(CW_REG_SOC_ALERT, val | CW_UPDATE_FLAG) != 0) return -1;
-    return cw_enter_active();
+    return cw_restart_into(CW_CONFIG_ACTIVE);
 }
 
 // 首次计算期间 SOC 可能暂时大于 100；最多等待 5 秒再判定初始化失败。
@@ -140,9 +139,9 @@ esp_err_t bsp_battery_init(void) {
     if (cw_read(CW_REG_VERSION, &ver, 1) != 0) {
         ESP_LOGW(TAG, "CW2017 未应答 —— 用 bsp_i2c_scan() 确认 0x%02X 是否在线;"
                       "无电量计的板子可忽略本项", BSP_I2C_CW2017_ADDR);
-        i2c_master_bus_rm_device(s_dev);
-        s_dev = NULL;
-        return ESP_ERR_NOT_FOUND;
+        // 走与下面同样的收尾:拆设备、清句柄、把错误原样返回。
+        e = ESP_ERR_NOT_FOUND;
+        goto fail;
     }
     ESP_LOGI(TAG, "检测到 CW2017 VERSION=0x%02X", ver);
 
@@ -166,7 +165,7 @@ esp_err_t bsp_battery_init(void) {
             e = ESP_FAIL;
             goto fail;
         }
-        if (config != CW_CONFIG_ACTIVE && cw_enter_active() != 0) {
+        if (config != CW_CONFIG_ACTIVE && cw_restart_into(CW_CONFIG_ACTIVE) != 0) {
             e = ESP_FAIL;
             goto fail;
         }

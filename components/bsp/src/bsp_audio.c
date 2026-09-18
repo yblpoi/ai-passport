@@ -289,7 +289,8 @@ static void audio_cleanup(void) {
         audio_codec_delete_ctrl_if(s_ctrl);
         s_ctrl = NULL;
     }
-    s_opened = false;
+    // s_opened 不在这里再写一次:第一句 audio_delete_codec() 无论 s_codec 是否为空
+    // 都会把它落成 false,这里是同一次调用链里的第二次赋同一个值。
     s_sleeping = false;
     s_initialized = false;
     s_sleep_result = ESP_OK;

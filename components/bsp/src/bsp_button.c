@@ -37,27 +37,37 @@ static int64_t s_sample_time;
 static int s_sample_mv = -1;
 static bool s_sample_valid;
 
+// 采 samples 次求平均,再换算成 mV。按键轮询与 bsp_button_read_mv() 用的是同一路 ADC
+// 与同一套失败口径(采样或校准任一步失败就是"读不到",由调用方决定当作没按还是返回 -1),
+// 所以收在一处 —— 两处各写一份的话,失败策略迟早会不一致。
+static bool adc_sample_mv(unsigned samples, int *mv_out) {
+    if (!s_adc || !s_cali || samples == 0) return false;
+
+    int sum = 0;
+    for (unsigned i = 0; i < samples; ++i) {
+        int raw = 0;
+        if (adc_oneshot_read(s_adc, BSP_BTN_ADC_CHANNEL, &raw) != ESP_OK) return false;
+        sum += raw;
+    }
+
+    int mv = 0;
+    if (adc_cali_raw_to_voltage(s_cali, sum / (int)samples, &mv) != ESP_OK) return false;
+    *mv_out = mv;
+    return true;
+}
+
 static uint8_t button_level(button_driver_t *driver) {
     if (!s_ready) return BUTTON_INACTIVE;
     const bsp_adc_button_t *button = (const bsp_adc_button_t *)driver;
     const int64_t now = esp_timer_get_time();
     // Share one averaged reading across the three keys in a polling cycle.
     if (!s_sample_valid || now - s_sample_time >= 1000) {
-        int sum = 0;
         s_sample_time = now;
         s_sample_valid = true;
+        // 读不到就保持 -1:下面的窗口比较全是非负数,自然判成没按。
         s_sample_mv = -1;
-        for (int i = 0; i < CONFIG_ADC_BUTTON_SAMPLE_TIMES; ++i) {
-            int raw;
-            if (adc_oneshot_read(s_adc, BSP_BTN_ADC_CHANNEL, &raw) != ESP_OK) {
-                return BUTTON_INACTIVE;
-            }
-            sum += raw;
-        }
-        if (adc_cali_raw_to_voltage(s_cali, sum / CONFIG_ADC_BUTTON_SAMPLE_TIMES,
-                                   &s_sample_mv) != ESP_OK) {
-            s_sample_mv = -1;
-        }
+        int mv = 0;
+        if (adc_sample_mv(CONFIG_ADC_BUTTON_SAMPLE_TIMES, &mv)) s_sample_mv = mv;
     }
     // Half-open windows prevent two keys from matching a shared boundary.
     return s_sample_mv >= BTN_MV[button->index][0] &&
@@ -203,11 +213,8 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
 int bsp_button_read_mv(void) {
     // 读的是 bsp_button_init() 建好、并与 iot_button 共用的那一路 ADC。
     // 单次采样与组件的按键轮询互不干扰(oneshot 内部自带锁)。
-    if (!s_adc || !s_cali) return -1;
-
-    int raw = 0, mv = 0;
-    if (adc_oneshot_read(s_adc, BSP_BTN_ADC_CHANNEL, &raw) != ESP_OK) return -1;
-    if (adc_cali_raw_to_voltage(s_cali, raw, &mv) != ESP_OK) return -1;
+    int mv = 0;
+    if (!adc_sample_mv(1, &mv)) return -1;
     return mv;
 }
 

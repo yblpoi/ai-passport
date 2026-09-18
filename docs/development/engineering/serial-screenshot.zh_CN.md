@@ -62,8 +62,12 @@ python3 tools/screenshot.py --raw dump.bin  # 另外留一份原始像素
 
 ## 从控制台驱动界面
 
-`key up|down|ok|long` 会走一遍 `love_app_key()`,和真的按一下完全等价。配上
-`shot`,每一屏都能从脚本里验:
+`key up|down|ok` 会走一遍 `love_app_key()`,与真的按一下等价。注意它注入的是**一整套按键手势**:
+先 `PRESS`,再按真机的顺序给出组件判定出的事件(短按 `CLICK`;`key long` 是确定长按的
+`PRESS + LONG`;`key dbl <键>` 是连按两次的 `PRESS`、`PRESS`、`DOUBLE`)。为什么不只注入一个
+CLICK:一次真按键本来就会发好几个事件,只发一个曾把一个真机 bug 藏住 —— 熄屏时按下发来的 PRESS
+亮了屏、紧接着的 CLICK 就在已亮屏的状态下把页面翻了,而注入路径根本不产生那个 PRESS(见
+`main/love_key.h`)。配上 `shot`,每一屏都能从脚本里验:
 
 ```bash
 python3 tools/screenshot.py --keys down,down,down -o /tmp/shots
@@ -77,10 +81,12 @@ python3 tools/screenshot.py --keys down,down,down -o /tmp/shots
 
 翻页顺序:主屏按"下"先走各张单页事件卡,再走列表屏各页,最后一页再按"下"回主屏;
 "上"反过来。屏幕上的页码是**整套轮播**的编号(单页卡与列表页共用一套)。
-`status` 会报当前屏与页码(`界面  单页卡「咕咕嘎嘎」(轮播第 1/3 页)`),
-一次翻页序列可以完全不截图就核对完:
+`status` 会报当前屏与页码,一次翻页序列可以完全不截图就核对完(下面是现配置 1 条单页 +
+7 条列表 = 轮播 3 页时的真实输出;新会话从主屏起步,所以第一下落在**单页卡**上):
 
 ```bash
+key down
+status          # 界面  单页卡「咕咕嘎嘎」(轮播第 1/3 页)
 key down
 status          # 界面  列表页(列表组第 1/2 页,轮播第 2/3 页)
 ```

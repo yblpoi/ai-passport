@@ -132,7 +132,7 @@ event order), `wifi …`,
 `ap` (hotspot state, `ap on`, `ap off`),
 `time <unix seconds>` to set the clock, `ble on` / `ble off`,
 and the **USB-only** `shot` (see [serial-screenshot.md](serial-screenshot.md)),
-`key` (inject a button press), `sleep` (trigger light/deep sleep, for checking the
+`key` (inject a whole button gesture: press, long press or double press), `sleep` (trigger light/deep sleep, for checking the
 idle behaviour) and `debug on`. Once a phone has connected and subscribed
 to notifications, the device pushes the output of `help` to it automatically.
 

@@ -76,9 +76,13 @@ abandoned rather than sending a torn image.
 
 ## Driving the UI from the console
 
-`key up|down|ok|long` runs one button event through `love_app_key()` exactly like
-a real press. Together with `shot` this makes every screen verifiable from a
-script:
+`key up|down|ok` runs a whole button **gesture** through `love_app_key()` exactly
+like a real press: PRESS first, then the event the button component judges from it
+(`CLICK` for a short press, `LONG` for `key long`, and `PRESS`, `PRESS`, `DOUBLE`
+for `key dbl <button>`). Injecting a single CLICK used to hide a real device bug —
+the PRESS of a blanked screen lit it up and the following CLICK then changed the
+page, while the injection path never produced that PRESS (see `main/love_key.h`).
+Together with `shot` this makes every screen verifiable from a script:
 
 ```bash
 python3 tools/screenshot.py --keys down,down,down -o /tmp/shots

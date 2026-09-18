@@ -465,36 +465,57 @@ static int cmd_status(void *ctx, int argc, char **argv)
     return 0;
 }
 
-// 调试用:把一次按键注入应用,等价于真的按一下。
+// 调试用:注入**一整套按键手势**,与真的按一下等价。
 // 存在的理由:截图协议只能看到"当前那一屏",没有这个入口就走不到别的屏去核对 ——
-// 列表、卡片、设置页的排版都验不了。参数上/下/确定/长按(长按=确定键长按)。
+// 列表、卡片、设置页的排版都验不了。
+//
+// 为什么必须注入"整套手势"而不是单个事件:一次真按键在官方 button 组件下会走
+//   短按    : PRESS_DOWN →(松开)PRESS_UP →(180ms)SINGLE_CLICK
+//   连按两次: PRESS_DOWN → PRESS_DOWN + PRESS_REPEAT →(180ms)DOUBLE_CLICK
+//   长按    : PRESS_DOWN →(1500ms)LONG_PRESS_START
+// 只发一个 CLICK 曾把一个真机 bug 藏了很久:熄屏时按下发出的 PRESS 亮了屏、紧接着的
+// CLICK 就在已亮屏的状态下把页面翻了 —— 注入路径根本不会产生那个 PRESS(见 love_key.h)。
+// 用法:key up|down|ok(短按)/ key long(确定长按)/ key dbl up|down|ok(连按两次)
 static int cmd_key(void *ctx, int argc, char **argv)
 {
     // **仅 USB**:它能驱动整个界面(包括开关蓝牙/热点、触发深睡眠),蓝牙链路上等于
     // 把"遥控器"交给任何连上来的近场设备。它是调试工具,插着线时用就够了。
     if (!require_usb(src_of(ctx), "按键注入")) return 1;
 
-    bsp_btn_t btn;
-    bsp_btn_ev_t ev = BSP_BTN_CLICK;
+    const char *usage = "用法: key up|down|ok(短按)/ key long(确定长按)/ key dbl up|down|ok(连按两次)\n";
     if (argc < 2) {
-        love_console_out("用法: key up|down|ok|long\n");
-        return 1;
-    }
-    if (strcmp(argv[1], "up") == 0) {
-        btn = BSP_BTN_UP;
-    } else if (strcmp(argv[1], "down") == 0) {
-        btn = BSP_BTN_DOWN;
-    } else if (strcmp(argv[1], "ok") == 0) {
-        btn = BSP_BTN_OK;
-    } else if (strcmp(argv[1], "long") == 0) {
-        btn = BSP_BTN_OK;
-        ev = BSP_BTN_LONG;
-    } else {
-        love_console_out("用法: key up|down|ok|long\n");
+        love_console_out("%s", usage);
         return 1;
     }
 
-    love_app_key(btn, ev);
+    bool twice = strcmp(argv[1], "dbl") == 0;
+    const char *name = twice ? (argc >= 3 ? argv[2] : NULL) : argv[1];
+    bool long_press = false;
+    bsp_btn_t btn;
+    if (name && strcmp(name, "up") == 0) {
+        btn = BSP_BTN_UP;
+    } else if (name && strcmp(name, "down") == 0) {
+        btn = BSP_BTN_DOWN;
+    } else if (name && strcmp(name, "ok") == 0) {
+        btn = BSP_BTN_OK;
+    } else if (!twice && name && strcmp(name, "long") == 0) {
+        btn = BSP_BTN_OK;
+        long_press = true;
+    } else {
+        love_console_out("%s", usage);
+        return 1;
+    }
+
+    // 按真实顺序放:先按下,再由组件"判定"出单击/双击/长按。
+    love_app_key(btn, BSP_BTN_PRESS);
+    if (long_press) {
+        love_app_key(btn, BSP_BTN_LONG);
+    } else if (twice) {
+        love_app_key(btn, BSP_BTN_PRESS);        // 第二次按下(真机上还会带一个 PRESS_REPEAT)
+        love_app_key(btn, BSP_BTN_DOUBLE);
+    } else {
+        love_app_key(btn, BSP_BTN_CLICK);
+    }
     return 0;
 }
 
@@ -614,7 +635,7 @@ static const love_command_t COMMANDS[] = {
     { "FAP_SCREENSHOT_V1", "同 shot", cmd_shot },
     { "debug",  "调试模式:debug status / debug on / debug off(开着不熄屏不深睡,仅 USB 可开)", cmd_debug },
     { "sleep",  "调试:sleep light / sleep deep [秒](仅 USB;秒数 0 = 睡到有人按键)", cmd_sleep },
-    { "key",    "调试:注入一次按键 key up|down|ok|long(仅 USB)", cmd_key },
+    { "key",    "调试:注入一整套按键手势 key up|down|ok / long / dbl <键>(仅 USB)", cmd_key },
     { "help",   "列出所有命令", cmd_help },
 };
 

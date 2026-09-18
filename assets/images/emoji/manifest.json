@@ -1,0 +1,107 @@
+{
+  "source": "Twemoji",
+  "repository": "https://github.com/jdecked/twemoji",
+  "tag": "v16.0.0",
+  "license": "CC-BY 4.0",
+  "license_file": "LICENSE-GRAPHICS.txt",
+  "license_sha256": "8ae9438818c26e4873b91d8c6ad620526c011e27e125677f13031eda903f007c",
+  "local_modification": "Pixelated for the 240x320 display: transparent margins trimmed, scaled proportionally to a 20x20 logical grid (alpha-weighted dominant colour per cell), then upscaled 2x to 40x40 by assets/images/love_pixel_art_gen.py.",
+  "files": [
+    {
+      "file": "1f426.png",
+      "code": "U+1F426",
+      "name": "bird",
+      "sha256": "e0a526ff1590cd0d197f5b38e8f887514ced114a21efe0e9a6b7ec9cc35c146f"
+    },
+    {
+      "file": "1f431.png",
+      "code": "U+1F431",
+      "name": "cat",
+      "sha256": "536beb584cb8e894615262dc5342dc13f18f7fe21f4657a936dc559b99031b4a"
+    },
+    {
+      "file": "1f436.png",
+      "code": "U+1F436",
+      "name": "dog",
+      "sha256": "ac8393e853a619d8cd2b502abb1cee1f79af97fd511b24f0a7cf99d102b2d02f"
+    },
+    {
+      "file": "1f430.png",
+      "code": "U+1F430",
+      "name": "rabbit",
+      "sha256": "4d45aea6b95575c5036a370fe38bc00280016f8217826c71315b73b593742eec"
+    },
+    {
+      "file": "1f43b.png",
+      "code": "U+1F43B",
+      "name": "bear",
+      "sha256": "131b848129e2841a669a7d77a121d170f1d339f902df943f8ce76f6fc80f2ce5"
+    },
+    {
+      "file": "1f98a.png",
+      "code": "U+1F98A",
+      "name": "fox",
+      "sha256": "8bff86f630984045bf6f6d61075d03c8edc7193c5417da21fdc505755d86e4bf"
+    },
+    {
+      "file": "2764.png",
+      "code": "U+2764",
+      "name": "heart",
+      "sha256": "68da7c6dc7d9c0456174f2575abe8f8abd52cde7a4017700579519173a8a4a34"
+    },
+    {
+      "file": "2b50.png",
+      "code": "U+2B50",
+      "name": "star",
+      "sha256": "427b7f8fbe46ce254c9950b28e5a370353c27d1f67d400c88c333a8f0ac3e599"
+    },
+    {
+      "file": "1f338.png",
+      "code": "U+1F338",
+      "name": "flower",
+      "sha256": "0122098dc3f61dfd2296ce7575299dbb962a9dfc45b44958fa57740ea9e05b3d"
+    },
+    {
+      "file": "1f319.png",
+      "code": "U+1F319",
+      "name": "moon",
+      "sha256": "3a9ada9e16379eb0bf8f470b439dfd62fbdffa694c18d1fc44a251a8479e768b"
+    },
+    {
+      "file": "1f382.png",
+      "code": "U+1F382",
+      "name": "cake",
+      "sha256": "8435f19559eaa852af385c4c2efadbbeeeaee4b325ecfd96c54bf4e7ba0f00c5"
+    },
+    {
+      "file": "1f381.png",
+      "code": "U+1F381",
+      "name": "gift",
+      "sha256": "1d8142ccc2d696dd6571ff277ec26b81d4231e1e00377aebaa5270a5f37075d5"
+    },
+    {
+      "file": "1f388.png",
+      "code": "U+1F388",
+      "name": "balloon",
+      "sha256": "245f85d1762ffaa5d4de6620480c4c44097c7353652c0be4cae3253ea28d2d03"
+    },
+    {
+      "file": "1f48d.png",
+      "code": "U+1F48D",
+      "name": "ring",
+      "sha256": "228b0f9602885c715627f619727b6b40033e0fb6e223d0c854261640bd15bc5d"
+    },
+    {
+      "file": "1f343.png",
+      "code": "U+1F343",
+      "name": "leaf",
+      "sha256": "99cf389d1d79fd62ff193aac6d7d4a03ee1751d5c1f07127f6871dcec5051068"
+    },
+    {
+      "file": "1f384.png",
+      "code": "U+1F384",
+      "name": "tree",
+      "sha256": "eb29ddb93eefdea899ba9216dd5541ada796a647ff339c891f620046d7cd1440"
+    }
+  ]
+}

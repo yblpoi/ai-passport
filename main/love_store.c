@@ -27,6 +27,8 @@ static const char *TAG = "love_store";
 #define KEY_TIME "time"
 #define KEY_DAYS_CACHE "days"
 #define KEY_AVATAR_PREFIX "av"    // NVS key 上限 15 字节:av0..av3
+// 头像自带的 16 色调色板(ap0..ap3)。与 av0..av3 分开存,见 love_config.h 的说明。
+#define KEY_AVATAR_PALETTE_PREFIX "ap"
 
 // 配置写盘时带版本号,后续结构变化可以识别而不是误读旧数据。
 // v2:加入 blank_off_seconds(自动熄屏秒数)。
@@ -496,9 +498,9 @@ bool love_store_load_days_cache(int32_t *days, uint64_t *epoch_seconds)
 
 /* ---------- 自定义头像 ---------- */
 
-static void avatar_key(uint8_t slot, char *out, size_t size)
+static void avatar_key(const char *prefix, uint8_t slot, char *out, size_t size)
 {
-    snprintf(out, size, "%s%u", KEY_AVATAR_PREFIX, (unsigned)slot);
+    snprintf(out, size, "%s%u", prefix, (unsigned)slot);
 }
 
 esp_err_t love_store_save_avatar(uint8_t slot, const void *data)
@@ -510,11 +512,51 @@ esp_err_t love_store_save_avatar(uint8_t slot, const void *data)
     memcpy(record.data, data, LOVE_AVATAR_BYTES);
 
     char key[8];
-    avatar_key(slot, key, sizeof(key));
+    char pal_key[8];
+    avatar_key(KEY_AVATAR_PREFIX, slot, key, sizeof(key));
+    avatar_key(KEY_AVATAR_PALETTE_PREFIX, slot, pal_key, sizeof(pal_key));
 
-    const esp_err_t err = store_set_blob(key, &record, sizeof(record));
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    // 先让新索引与旧配色脱钩:网页要是接着传配色,下一次调用会把它写回来;
+    // 只传 800 字节索引的上传到此结束 —— 语义正好是"回到设备那 16 色图标配色"。
+    err = nvs_set_blob(handle, key, &record, sizeof(record));
+    if (err == ESP_OK) (void)nvs_erase_key(handle, pal_key);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+
     if (err != ESP_OK) ESP_LOGE(TAG, "保存头像 %u 失败: %s", (unsigned)slot, esp_err_to_name(err));
     return err;
+}
+
+esp_err_t love_store_save_avatar_palette(uint8_t slot, const void *palette)
+{
+    if (slot >= LOVE_AVATAR_MAX || !palette) return ESP_ERR_INVALID_ARG;
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+
+    char key[8];
+    avatar_key(KEY_AVATAR_PALETTE_PREFIX, slot, key, sizeof(key));
+
+    const esp_err_t err = store_set_blob(key, palette, LOVE_AVATAR_PALETTE_BYTES);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "保存头像配色 %u 失败: %s", (unsigned)slot, esp_err_to_name(err));
+    }
+    return err;
+}
+
+size_t love_store_load_avatar_palette(uint8_t slot, void *out, size_t out_size)
+{
+    if (slot >= LOVE_AVATAR_MAX || !out || out_size < LOVE_AVATAR_PALETTE_BYTES) return 0;
+    if (!s_ready) return 0;
+
+    char key[8];
+    avatar_key(KEY_AVATAR_PALETTE_PREFIX, slot, key, sizeof(key));
+
+    // 没有这个键 = 这张头像用设备那 16 色图标配色(老固件上传的、或网页只传了 800 字节)。
+    if (!store_get_blob(key, out, LOVE_AVATAR_PALETTE_BYTES)) return 0;
+    return LOVE_AVATAR_PALETTE_BYTES;
 }
 
 size_t love_store_load_avatar(uint8_t slot, void *out, size_t out_size)
@@ -523,7 +565,7 @@ size_t love_store_load_avatar(uint8_t slot, void *out, size_t out_size)
     if (!s_ready) return 0;
 
     char key[8];
-    avatar_key(slot, key, sizeof(key));
+    avatar_key(KEY_AVATAR_PREFIX, slot, key, sizeof(key));
 
     avatar_record_t record;
     if (!store_get_blob(key, &record, sizeof(record))) return 0;
@@ -538,14 +580,19 @@ esp_err_t love_store_clear_avatar(uint8_t slot)
     if (slot >= LOVE_AVATAR_MAX) return ESP_ERR_INVALID_ARG;
     if (!s_ready) return ESP_ERR_INVALID_STATE;
 
+    // 头像与它的调色板一起清:留着 apN 会变成"没有头像却有配色"的残片,
+    // 下次上传要是只传 800 字节就会被这份残片染色。
     char key[8];
-    avatar_key(slot, key, sizeof(key));
+    char pal_key[8];
+    avatar_key(KEY_AVATAR_PREFIX, slot, key, sizeof(key));
+    avatar_key(KEY_AVATAR_PALETTE_PREFIX, slot, pal_key, sizeof(pal_key));
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(LOVE_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) return err;
 
     (void)nvs_erase_key(handle, key);
+    (void)nvs_erase_key(handle, pal_key);
     err = nvs_commit(handle);
     nvs_close(handle);
     return err;

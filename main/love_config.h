@@ -31,6 +31,12 @@ bool love_blank_off_valid(uint16_t seconds);
 // 每个槽位固定 LOVE_AVATAR_BYTES 字节,便于按槽位随机读写。
 #define LOVE_AVATAR_BYTES 800
 
+// 每张自定义头像可以自带一张 16 色调色板(16 个 0x00RRGGBB,与 love_pixel_palette
+// 同一布局):照片自己取色远比设备那 16 色图标配色贴近原图。**它单独占一个键**,
+// 不塞进头像记录里 —— 老固件写下的记录是定长的,扩容会让它整体读不出来;
+// 而独立键的"不存在"恰好就等于"用设备那 16 色",老头像因此不需要任何迁移。
+#define LOVE_AVATAR_PALETTE_BYTES 64
+
 typedef struct {
     char name[LOVE_NAME_MAX];
     uint8_t icon;

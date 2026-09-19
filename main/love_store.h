@@ -80,7 +80,15 @@ esp_err_t love_store_save_days_cache(int32_t days, uint64_t epoch_seconds);
 bool love_store_load_days_cache(int32_t *days, uint64_t *epoch_seconds);
 
 // 自定义头像。slot 为 0..LOVE_AVATAR_MAX-1,data 必须恰好 LOVE_AVATAR_BYTES 字节。
+// **保存索引会先清掉该槽位已有的配色**:新图与旧配色不能混着用,要自带配色就紧接着
+// 调 love_store_save_avatar_palette()。
 esp_err_t love_store_save_avatar(uint8_t slot, const void *data);
 // 读出槽位数据;成功返回实际字节数,没有该槽位返回 0。
 size_t love_store_load_avatar(uint8_t slot, void *out, size_t out_size);
+// 头像自带的 16 色调色板(LOVE_AVATAR_PALETTE_BYTES 字节)。palette 是
+// 16 个 0x00RRGGBB,与 love_pixel_palette 同一布局,可直接喂给 ui_pixel_pack_avatar_i4。
+esp_err_t love_store_save_avatar_palette(uint8_t slot, const void *palette);
+// 读出配色;没有存过(老头像、或网页只传了索引)返回 0,调用方回落到设备那 16 色。
+size_t love_store_load_avatar_palette(uint8_t slot, void *out, size_t out_size);
+// 清头像时会把它的配色一起清掉。
 esp_err_t love_store_clear_avatar(uint8_t slot);

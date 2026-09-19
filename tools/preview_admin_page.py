@@ -21,7 +21,7 @@ WEB = ROOT / "assets/web"
 TEMPLATE = WEB / "admin.html"
 STYLESHEET = WEB / "admin.css"
 SCRIPT = WEB / "admin.js"
-AVATAR_SLIC = ROOT / "assets" / "web" / "avatar_slic.js"
+AVATAR_PIXEL = ROOT / "assets" / "web" / "avatar_pixel.js"
 ASSETS = ROOT / "assets/images/web/assets.json"
 LUNAR_TABLE = ROOT / "assets/images/web/lunar.json"
 
@@ -70,6 +70,7 @@ MOCK_STATE = {
     },
     "icons": list(range(16)),
     "avatars": ["", "", "", ""],
+    "avatar_palettes": ["", "", "", ""],
 }
 
 
@@ -94,10 +95,10 @@ def _render_pages() -> tuple[bytes, bytes, bytes]:
     script = script.replace("__ICONS_JSON__", json.dumps(icons, ensure_ascii=False))
     script = script.replace("__PALETTE_JSON__", json.dumps(palette))
     script = script.replace("__LUNAR_JSON__", LUNAR_TABLE.read_text(encoding="utf-8").strip())
-    script = script.replace("__AVATAR_SLIC_JS__", AVATAR_SLIC.read_text(encoding="utf-8").strip())
+    script = script.replace("__AVATAR_PIXEL_JS__", AVATAR_PIXEL.read_text(encoding="utf-8").strip())
 
     for placeholder in ("__ICONS_JSON__", "__PALETTE_JSON__", "__LUNAR_JSON__",
-                        "__AVATAR_SLIC_JS__"):
+                        "__AVATAR_PIXEL_JS__"):
         if placeholder in script:
             raise SystemExit(f"预览渲染漏了占位符 {placeholder}")
 
@@ -170,17 +171,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "请求体必须是对象")
             MOCK_STATE["config"] = incoming
 
-        # 自定义头像:和真机一样按 slot 存定长 4bpp 数据,方便本地把上传流程走通。
+        # 自定义头像:和真机一样按 slot 存,方便本地把上传流程走通。
+        # 864 字节 = 64 字节配色 + 800 字节索引(新格式);800 字节 = 只用索引,配色清空
+        # ——与 main/love_httpd.c 的 handle_avatar() 同一套规则。
         if path in ("/api/avatar", "/api/avatar/clear"):
             slot = _query_slot(query)
             if slot is None:
                 return self._error(400, "slot 参数不合法")
             if path == "/api/avatar/clear":
                 MOCK_STATE["avatars"][slot] = ""
+                MOCK_STATE["avatar_palettes"][slot] = ""
             else:
-                if len(payload) != 800:
-                    return self._error(400, "头像数据必须是 800 字节的 4bpp 数据")
-                MOCK_STATE["avatars"][slot] = base64.b64encode(payload).decode("ascii")
+                if len(payload) not in (800, 864):
+                    return self._error(400, "头像数据必须是 864 字节(64 配色 + 800 索引)或 800 字节(只用索引)")
+                has_palette = len(payload) == 864
+                if has_palette:
+                    MOCK_STATE["avatar_palettes"][slot] = base64.b64encode(payload[:64]).decode("ascii")
+                else:
+                    MOCK_STATE["avatar_palettes"][slot] = ""
+                MOCK_STATE["avatars"][slot] = base64.b64encode(payload[-800:]).decode("ascii")
 
         # 热点开关:真机的 /api/ap 会改设备状态并把新状态回给网页。这里照做,
         # 否则"关热点 → 提示文案变成手动关闭"这条分支在本地根本走不到。

@@ -150,13 +150,6 @@ static esp_err_t recv_exact(httpd_req_t *req, char *buf, size_t len)
     return ESP_OK;
 }
 
-// 请求体必须是定长二进制(头像不是 JSON,不走 read_json)。
-static esp_err_t read_exact(httpd_req_t *req, uint8_t *buf, size_t expect)
-{
-    if (req->content_len != (int)expect) return ESP_ERR_INVALID_SIZE;
-    return recv_exact(req, (char *)buf, expect);
-}
-
 // 读取并解析 JSON 请求体;失败时已回复错误响应。
 static bool read_json(httpd_req_t *req, cJSON **out)
 {
@@ -297,13 +290,25 @@ static cJSON *state_to_json(void)
     // 自定义头像槽位:已上传的把 4bpp 原始数据以 base64 回给网页,
     // 网页才能在选择器里画出缩略图(重开页面后也还在)。空槽位给空串。
     cJSON *avatars = cJSON_AddArrayToObject(root, "avatars");
+    // 头像自带的 16 色调色板另发一组:网页画缩略图、以及在实时预览里"再走一遍像素化"
+    // 都要用它,否则老头像会被画成设备那 16 色图标配色。没存过的槽位给空串。
+    cJSON *avatar_palettes = cJSON_AddArrayToObject(root, "avatar_palettes");
     static uint8_t slot_data[LOVE_AVATAR_BYTES];
+    static uint8_t slot_palette[LOVE_AVATAR_PALETTE_BYTES];
     for (uint8_t slot = 0; slot < LOVE_AVATAR_MAX; slot++) {
         if (love_store_load_avatar(slot, slot_data, sizeof(slot_data)) == LOVE_AVATAR_BYTES) {
             cJSON_AddItemToArray(avatars, cJSON_CreateString(base64_encode(slot_data,
                                                                           LOVE_AVATAR_BYTES)));
         } else {
             cJSON_AddItemToArray(avatars, cJSON_CreateString(""));
+        }
+
+        if (love_store_load_avatar_palette(slot, slot_palette, sizeof(slot_palette))
+            == LOVE_AVATAR_PALETTE_BYTES) {
+            cJSON_AddItemToArray(avatar_palettes, cJSON_CreateString(base64_encode(slot_palette,
+                                                    LOVE_AVATAR_PALETTE_BYTES)));
+        } else {
+            cJSON_AddItemToArray(avatar_palettes, cJSON_CreateString(""));
         }
     }
     free(cfg);
@@ -409,8 +414,10 @@ static esp_err_t avatar_slot(httpd_req_t *req, uint8_t *out_slot)
 }
 
 // POST /api/avatar?slot=N
-// 请求体是 LOVE_AVATAR_BYTES 字节的 4bpp 索引数据(索引指向 love_pixel_palette),
-// 由后台网页用 canvas 压好再传,设备端不做图像处理。
+// 请求体是二进制,两种长度都收:
+//   864 字节 = 64 字节调色板(16 个 0x00RRGGBB,小端) + 800 字节 4bpp 索引;
+//   800 字节 = 只有索引,表示"用设备那 16 色图标配色"(老头像、以及手工 curl 的路径)。
+// 图像处理全在网页里做(canvas),设备端只负责存。
 static esp_err_t handle_avatar(httpd_req_t *req)
 {
     love_net_ap_touch();
@@ -419,17 +426,30 @@ static esp_err_t handle_avatar(httpd_req_t *req)
     const esp_err_t slot_err = avatar_slot(req, &slot);
     if (slot_err != ESP_OK) return slot_err;
 
-    static uint8_t data[LOVE_AVATAR_BYTES];
-    if (read_exact(req, data, sizeof(data)) != ESP_OK) {
-        return send_error(req, "400 Bad Request", "头像数据必须是 800 字节的 4bpp 数据");
+    const size_t body = (size_t)req->content_len;
+    const bool has_palette = (body == LOVE_AVATAR_BYTES + LOVE_AVATAR_PALETTE_BYTES);
+    if (body != LOVE_AVATAR_BYTES && !has_palette) {
+        return send_error(req, "400 Bad Request",
+                          "头像数据必须是 864 字节(64 配色 + 800 索引)或 800 字节(只用索引)");
     }
 
-    if (love_store_save_avatar(slot, data) != ESP_OK) {
+    static uint8_t data[LOVE_AVATAR_BYTES + LOVE_AVATAR_PALETTE_BYTES];
+    if (recv_exact(req, (char *)data, body) != ESP_OK) {
+        return send_error(req, "400 Bad Request", "读取头像数据失败");
+    }
+    const uint8_t *const packed = data + (has_palette ? LOVE_AVATAR_PALETTE_BYTES : 0);
+
+    if (love_store_save_avatar(slot, packed) != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "保存头像失败");
     }
-    // 成功也留一行:上传是 800 字节的二进制 POST,失败了页面只弹一个 toast,
+    // 只传索引的上传到此结束:love_store_save_avatar() 已经把上一次的配色清掉了。
+    if (has_palette && love_store_save_avatar_palette(slot, data) != ESP_OK) {
+        return send_error(req, "500 Internal Server Error", "头像已保存,但配色没存上");
+    }
+
+    // 成功也留一行:上传是二进制 POST,失败了页面只弹一个 toast,
     // 设备侧要是也不说话,"没上传"和"上传成功"在日志里就分不出来。
-    ESP_LOGI(TAG, "头像已保存: 槽位 %d", slot);
+    ESP_LOGI(TAG, "头像已保存: 槽位 %d%s", slot, has_palette ? "(自带配色)" : "(图标配色)");
     return finish(req);
 }
 

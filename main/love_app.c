@@ -359,11 +359,17 @@ static const lv_image_dsc_t *resolve_icon(uint8_t icon)
         return love_pixel_icon(0);   // 该槽位还没上传过,退回内置图标而不是留空
     }
 
+    // 配色:优先用这张头像自带的 16 色(网页按照片自己取色),取不到就回落到设备那
+    // 16 色图标配色 —— 老固件上传的头像、以及网页只传了索引的那条路径就是这样。
+    uint32_t palette[LOVE_PALETTE_COUNT];
+    memcpy(palette, love_pixel_palette, sizeof(palette));
+    (void)love_store_load_avatar_palette((uint8_t)slot, palette, sizeof(palette));
+
     const int idx = s_avatar_used;
     uint8_t *const data = s_avatar_data[idx];
     // 打包顺带把四角镂空(做法见 ui_pixel_pack_avatar_i4 的说明)。
     if (ui_pixel_pack_avatar_i4(data, sizeof(s_avatar_data[idx]), packed,
-                                love_pixel_palette, LOVE_ICON_PX, LOVE_ICON_PX,
+                                palette, LOVE_ICON_PX, LOVE_ICON_PX,
                                 AVATAR_CORNER_RADIUS) < 0) {
         return love_pixel_icon(0);
     }

@@ -72,45 +72,57 @@
       </div>
     </div>
     <label>第一个人头像</label><div class="icons" id="iconsA"></div>
+    <!-- 第一个人下面的入口：展开下面那份共用的高级参数面板并滚过去。面板只有一份；
+         按钮刻意放在 #iconsA 外面 —— iconPicker() 每次都重建容器内容，放进去会被清掉。 -->
+    <button type="button" class="ghost" id="advOpenA" style="margin-top:8px; width:100%">调整像素化参数</button>
     <label>第二个人头像</label><div class="icons" id="iconsB"></div>
-    <!-- 只影响"往空槽传照片"时的处理：设备端存的还是 40x40、16 色，网页这边用
-         SLIC 超像素把照片按区域抹平成像素画，档位决定超像素的粗细。 -->
-    <label for="avatarStrength">照片像素化强度<span class="muted">（上传照片时使用）</span></label>
+    <!-- 预设与下面的高级参数是同一组值：选预设 = 把它的值填进旋钮，动过任一旋钮就显示"自定义"。 -->
+    <label for="avatarStrength">照片像素化强度</label>
     <select id="avatarStrength">
-      <option value="soft" selected>弱：保留更多细节</option>
-      <option value="normal">标准</option>
-      <option value="strong">强：大块平涂，更像海报</option>
-      <option value="custom" hidden>自定义（见下面的高级参数）</option>
+      <option value="natural" selected>贴近原图 · 细节最全</option>
+      <option value="balanced">均衡 · 细节少一点，更干净</option>
+      <option value="pixel">像素画 · 大片平涂</option>
+      <option value="custom" hidden>自定义</option>
     </select>
-    <!-- 高级参数：三个旋钮 + 上色方式。照参考实现（xs7/Pixelate 的 dat.GUI）给的，
-         区别是这里直接给"设备那 16 色 + 40x40"下的实时预览，改完一眼能看到。 -->
+    <!-- 高级参数：五个旋钮 + 实时预览，改完即时看效果。 -->
     <details class="adv" id="advBox">
-      <summary>高级参数<span class="muted">（改完即时预览；三档预设只是它们的组合）</span></summary>
+      <summary>高级参数</summary>
       <div class="advrow">
-        <label for="advStep">超像素大小 <b id="advStepVal">8</b><span class="muted"> px</span></label>
-        <input type="range" id="advStep" min="4" max="32" step="1" value="8">
+        <label for="advColors">取色数量 <b id="advColorsVal">16</b><span class="muted"> 色 · 越少越大片平涂</span></label>
+        <input type="range" id="advColors" min="4" max="16" step="1" value="16">
       </div>
       <div class="advrow">
-        <label for="advIters">迭代次数 <b id="advItersVal">5</b></label>
-        <input type="range" id="advIters" min="1" max="12" step="1" value="5">
+        <label for="advClean">去孤立点 <b id="advCleanVal">0</b><span class="muted"> 轮 · 0 = 关闭，调大更干净但会吃掉细节</span></label>
+        <input type="range" id="advClean" min="0" max="3" step="1" value="0">
       </div>
       <div class="advrow">
-        <label for="advWeight">颜色权重 <b id="advWeightVal">12</b><span class="muted">（越小越按位置分块）</span></label>
-        <input type="range" id="advWeight" min="4" max="48" step="1" value="12">
+        <label for="advPalette">配色来源<span class="muted"> · 切过去会变成图标那种卡通色</span></label>
+        <select id="advPalette">
+          <option value="photo" selected>照片自己的颜色</option>
+          <option value="device">设备图标配色</option>
+        </select>
       </div>
-      <label for="advMode">上色方式<span class="muted">（一片区域该填什么色）</span></label>
-      <select id="advMode">
-        <option value="cell" selected>格子内该区域的平均色：细节最多</option>
-        <option value="center">区域中心那一颗原像素：对比强，同区域仍同色</option>
-        <option value="vote">区域内最多的调色板色：最典型的像素画</option>
-        <option value="mean">区域平均色：最平滑、最平涂</option>
-      </select>
+      <div class="advrow">
+        <label for="advSample">采样方式<span class="muted"> · 细节越少越干净</span></label>
+        <select id="advSample">
+          <option value="area" selected>细节最少（最干净）</option>
+          <option value="center">细节偏多</option>
+          <option value="point">细节最多（可能偏碎）</option>
+        </select>
+      </div>
+      <div class="advrow">
+        <label for="advAssign">上色规则<span class="muted"> · 小块的暗部要不要留下</span></label>
+        <select id="advAssign">
+          <option value="vote" selected>保住小块暗部</option>
+          <option value="mean">更平滑</option>
+        </select>
+      </div>
       <div class="advpreview">
         <canvas id="advPreview" width="160" height="160"></canvas>
-        <p class="muted" id="advHint">先在这里选一张照片，或直接调参数看效果（预览对应当前这张图的 40x40 结果）。</p>
+        <p class="muted" id="advHint">先选一张照片，或直接调参数看看效果。</p>
       </div>
       <div class="row" style="margin-top:8px">
-        <button type="button" class="accent" id="advReupload" hidden>用当前参数重新上传这张</button>
+        <button type="button" class="accent" id="advReupload" hidden>按当前设置重新上传</button>
         <button type="button" class="ghost" id="advReset">恢复默认</button>
       </div>
     </details>

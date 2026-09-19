@@ -2,7 +2,9 @@
 // 图标是内联的 data URI(一共两千多字节)。不要改回 /icon/N.png 那种独立资源:
 // 一次页面加载会多出十六个并发请求,把设备那点堆压到 Wi-Fi 驱动发不出帧。
 const ICONS = __ICONS_JSON__;
-// 设备端 4bpp 自定义头像用的 16 色调色板,顺序即索引顺序,必须与设备一致。
+// 设备端的 16 色图标配色,顺序即索引顺序,必须与设备一致。新上传的头像**自带**自己的
+// 16 色(见 avatar_pixel.js),这张表只在两种情况下用:老头像(没有自带配色)、以及
+// 内置图标。规则与设备端 love_store_load_avatar_palette() 的回退一致。
 const PALETTE = __PALETTE_JSON__;
 const AVA = 40;                       // 与设备端 LOVE_ICON_PX 一致
 const AVATAR_BYTES = AVA * AVA / 2;   // 40x40 4bpp = 800 字节
@@ -13,6 +15,9 @@ const byId = (id) => document.getElementById(id);
 
 // 设备回传的自定义头像(4bpp base64,每个槽位一个,空串表示没上传)
 let AVATARS = new Array(AVATAR_MAX).fill("");
+// 每个槽位自带的 16 色调色板(64 字节 base64)。空串 = 这张头像用设备那 16 色图标配色
+// (老头像、或只传了索引的那种),与设备端 love_store_load_avatar_palette() 的规则一致。
+let AVATAR_PALETTES = new Array(AVATAR_MAX).fill("");
 
 let model = { start:"", blankOff:30, people:[{name:"",icon:0},{name:"",icon:1}], events:[] };
 
@@ -26,12 +31,13 @@ async function api(path, options){
 }
 
 /* ---------- 自定义头像：网页压缩 -> 设备存 4bpp ---------- */
-// 像素化的内核在 assets/web/avatar_slic.js（SLIC 超像素 + 16 色量化），由
+// 像素化的内核在 assets/web/avatar_pixel.js（每图自带 16 色 + 逐格选色），由
 // tools/gen_admin_page.py 内联在下面这一行。它单独成文件是为了能被主机测试直接跑
-// （tests/test_avatar_slic.mjs）—— 这段数学要是只活在浏览器里，就只能靠肉眼验收了。
-__AVATAR_SLIC_JS__
+// （tests/test_avatar_pixel.mjs）—— 这段数学要是只活在浏览器里，就只能靠肉眼验收了。
+__AVATAR_PIXEL_JS__
 
-// 选中的图片 -> 居中裁成正方形 -> 240x240 工作图 -> SLIC -> 40x40、16 色、4bpp。
+// 选中的图片 -> 居中裁成正方形 -> 240x240 工作图 -> 取色 + 上色 -> 864 字节
+// （64 字节调色板 + 800 字节 4bpp），一次 POST 传给设备。
 //
 // 用 <img> 而不是 createImageBitmap 解码:iPhone 相册默认是 HEIC,Safari 的
 // createImageBitmap 对它的支持比 <img> 窄得多;走 <img> 就是走浏览器自己的
@@ -49,7 +55,7 @@ async function compressAvatar(file, params){
 
     const w = bitmap.naturalWidth, h = bitmap.naturalHeight;
     const side = Math.min(w, h);
-    const work = AVA * SLIC_WORK_SCALE;
+    const work = AVA * AVA_WORK_SCALE;
     const canvas = document.createElement("canvas");
     canvas.width = work; canvas.height = work;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -61,21 +67,44 @@ async function compressAvatar(file, params){
     // 留一份工作图给高级参数的实时预览用：调滑块时不需要重新解码/缩放原图。
     previewPx = px;
     previewSourceNote = "";
-    return packAvatar4bpp(slicPixelate(px, AVA, PALETTE, params));
+    return avatarBytes(px, params);
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
+// 工作图 -> 设备要的那串字节（864 = 64 配色 + 800 索引，与 main/love_httpd.c 对齐）。
+function avatarBytes(px, params){
+  const done = pixelateAvatar(px, AVA * AVA_WORK_SCALE, AVA, params);
+  const palette = packAvatarPalette(done.palette);
+  const indices = packAvatar4bpp(done.idx);
+  const out = new Uint8Array(palette.length + indices.length);
+  out.set(palette, 0);
+  out.set(indices, palette.length);
+  return out;
+}
+
+// 设备回传的 64 字节配色 -> [[r,g,b] x16]，实现在 avatar_pixel.js 的 paletteOf()：
+// 它是"打包成 64 字节"的逆运算，两半必须待在一起、由同一条主机测试钉住来回一致。
+// 空串（老头像、或网页只传了索引）返回 null，调用方回落到设备那 16 色图标配色 ——
+// 这也是设备端的规则，两边必须一致。
+
 /* ---------- 高级参数：像素化怎么算（照参考实现的 dat.GUI，多了实时预览） ---------- */
 //
-//   超像素大小 step    网格间距（工作图 240px 里的 px）。比输出格子(6px)还小时，
-//                      一格会横跨好几个区域，"多数票"会来回翻 → 起噪点。
-//   迭代次数 iters     少了边界更硬更碎，多了区域更整齐（也更容易大块平涂）。
-//   颜色权重 weight    "颜色差多少才算另一个区域"：越大越只按颜色分、区域越贴边。
-//   上色方式 mode      一格最后填什么颜色 —— 对细节影响最大，详见 avatar_slic.js。
-const ADV_DEFAULTS = { step: SLIC_GEARS[DEFAULT_GEAR].step, iters: SLIC_GEARS[DEFAULT_GEAR].iters,
-                       weight: SLIC_GEARS[DEFAULT_GEAR].weight, mode: DEFAULT_MODE };
+// 五个旋钮的语义与默认值都定义在 avatar_pixel.js 的 resolveAvatarParams() 里，这里只
+// 负责把界面对上号。默认那一档就是用户偏好的那版：细节最全、不做去孤立点（去孤立点会
+// 吃掉一部分真细节，取舍归用户，见内核顶部说明）。
+const ADV_DEFAULTS = { colors: AVA_COLORS_DEFAULT, palette: "photo", sample: "area",
+                       assign: "vote", clean: 0 };
+
+// 三档预设 = 一整组参数（不再是"只改取色数量"）。三档都在默认之上沿"细节 vs 干净"这根轴
+// 移动：越往下色越少、去孤立点越多。改过任一旋钮都会落到"自定义"，见 advMarkGear()。
+const AVATAR_PRESETS = {
+  natural:  { colors: 16, palette: "photo", sample: "area", assign: "vote", clean: 0 },
+  balanced: { colors: 12, palette: "photo", sample: "area", assign: "vote", clean: 1 },
+  pixel:    { colors: 8,  palette: "photo", sample: "area", assign: "vote", clean: 2 },
+};
+const AVATAR_PRESET_DEFAULT = "natural";
 
 let avatarParams = Object.assign({}, ADV_DEFAULTS);
 let previewPx = null;          // 240x240 的工作图（选过照片、或取自现有头像）
@@ -85,56 +114,69 @@ let previewTimer = 0;
 // 重新走一遍相册选择（手机上尤其烦）。
 let lastAvatarUpload = null;
 
-function advSyncLabels(){
-  byId("advStepVal").textContent = avatarParams.step;
-  byId("advItersVal").textContent = avatarParams.iters;
-  byId("advWeightVal").textContent = avatarParams.weight;
-  byId("advStep").value = avatarParams.step;
-  byId("advIters").value = avatarParams.iters;
-  byId("advWeight").value = avatarParams.weight;
-  byId("advMode").value = avatarParams.mode;
+// 交给内核的那份参数：把设备那 16 色一并带上（palette:"device" 时才用得到）。内核里
+// 没有 PALETTE 这个名字，只认 params.devicePalette —— 见 avatar_pixel.js。
+function avatarKernelParams(){
+  return Object.assign({}, avatarParams, { devicePalette: PALETTE });
 }
 
-// 档位与滑块是一回事：选档 = 把三个数抄进滑块；动过滑块之后档位显示"自定义"。
+function advSyncLabels(){
+  byId("advColorsVal").textContent = avatarParams.colors;
+  byId("advColors").value = avatarParams.colors;
+  byId("advPalette").value = avatarParams.palette;
+  byId("advSample").value = avatarParams.sample;
+  byId("advAssign").value = avatarParams.assign;
+  byId("advCleanVal").textContent = avatarParams.clean;
+  byId("advClean").value = avatarParams.clean;
+}
+
+// 档位与旋钮是一回事：选档 = 把预设抄进五个旋钮；动过任一旋钮就显示"自定义"。
+// 比的是五个字段——早先只比 colors 一个数，现在多了配色来源/采样/上色/清洗，只比一个会漏。
 function advMarkGear(){
-  const name = byId("avatarStrength").value;
-  const g = SLIC_GEARS[name];
-  const isPreset = g && g.step === avatarParams.step && g.iters === avatarParams.iters &&
-                   g.weight === avatarParams.weight;
-  if (!isPreset) byId("avatarStrength").value = "custom";
+  for (const [name, preset] of Object.entries(AVATAR_PRESETS)){
+    if (Object.keys(preset).every((k) => preset[k] === avatarParams[k])){
+      byId("avatarStrength").value = name; return;
+    }
+  }
+  byId("avatarStrength").value = "custom";
 }
 
 function advApplyPreset(name){
-  const g = SLIC_GEARS[name];
-  if (!g) return;
-  avatarParams.step = g.step;
-  avatarParams.iters = g.iters;
-  avatarParams.weight = g.weight;
+  const preset = AVATAR_PRESETS[name];
+  if (!preset) return;
+  avatarParams = Object.assign({}, preset);
   advSyncLabels();
+  advMarkGear();          // 让档位下拉自己回到这个预设（而不是依赖调用方先把 select 设好）
   advSchedulePreview();
 }
 
 function advFromInputs(){
-  avatarParams.step = Number(byId("advStep").value);
-  avatarParams.iters = Number(byId("advIters").value);
-  avatarParams.weight = Number(byId("advWeight").value);
-  avatarParams.mode = byId("advMode").value;
+  avatarParams.colors = Number(byId("advColors").value);
+  avatarParams.palette = byId("advPalette").value;
+  avatarParams.sample = byId("advSample").value;
+  avatarParams.assign = byId("advAssign").value;
+  avatarParams.clean = Number(byId("advClean").value);
   advSyncLabels();
   advMarkGear();
   advSchedulePreview();
 }
 
-// 预览：把 40x40 的索引按设备那张 16 色调色板画出来，放大 4 倍（像素风要最近邻，
+// 预览：把 40x40 的索引按这张图自己的 16 色画出来，放大 4 倍（像素风要最近邻，
 // CSS 的 image-rendering: pixelated 保证放大不发虚）。
+//
+// 提示行给三个数：耗时 / 用色数 / 孤立点数。后两个正是调参时唯一能看见反馈的量 ——
+// "用色"是这张 40x40 实际用到几种色，"孤立点"是去孤立点那个旋钮在处理的量。少了它们，
+// 拖滑块只能靠肉眼在 160px 的画布上猜。
 function advRenderPreview(){
   const canvas = byId("advPreview");
   if (!previewPx){
     canvas.style.display = "none";
-    byId("advHint").textContent = "先在上面选一张照片，或直接调参数看效果。";
+    byId("advHint").textContent = "先选一张照片，或直接调参数看看效果。";
     return;
   }
   const t0 = performance.now();
-  const idx = slicPixelate(previewPx, AVA, PALETTE, avatarParams);
+  const done = pixelateAvatar(previewPx, AVA * AVA_WORK_SCALE, AVA, avatarKernelParams());
+  const ms = Math.round(performance.now() - t0);
   const scale = 4, side = AVA * scale;
   canvas.width = side; canvas.height = side;
   canvas.style.display = "";
@@ -142,14 +184,16 @@ function advRenderPreview(){
   const img = ctx.createImageData(side, side);
   for (let y = 0; y < side; y++){
     for (let x = 0; x < side; x++){
-      const p = PALETTE[idx[((y / scale) | 0) * AVA + ((x / scale) | 0)]] || [0, 0, 0];
+      const p = done.palette[done.idx[((y / scale) | 0) * AVA + ((x / scale) | 0)]] || [0, 0, 0];
       const o = (y * side + x) * 4;
       img.data[o] = p[0]; img.data[o + 1] = p[1]; img.data[o + 2] = p[2]; img.data[o + 3] = 255;
     }
   }
   ctx.putImageData(img, 0, 0);
-  byId("advHint").textContent = "预览（40x40 放大 4 倍，用的就是设备那 16 色）：" +
-                                Math.round(performance.now() - t0) + " ms 算完。" + previewSourceNote;
+  const usedColors = new Set(done.idx).size;
+  const isolated = countIsolatedCells(done.idx, AVA);
+  byId("advHint").textContent = "预览：算完 " + ms + " ms / 用色 " + usedColors +
+                                " / 孤立点 " + isolated + "。" + previewSourceNote;
 }
 
 function advSchedulePreview(){
@@ -157,34 +201,41 @@ function advSchedulePreview(){
   previewTimer = setTimeout(advRenderPreview, 120);   // 拖滑块时别每像素都重算
 }
 
+// 槽位 -> 画它该用的 16 色：设备回传的自带配色，没有就是设备那 16 色图标配色。
+function slotPalette(slot){
+  return paletteOf(AVATAR_PALETTES[slot]) || PALETTE;
+}
+
 // 没选过照片时，用设备上已有的某个自定义头像当预览源：把 4bpp 解成 40x40 索引、
 // 再按 6 倍放大成 240x240（相当于"如果拿这张头像再走一遍像素化"）。
 function advPreviewFromAvatar(){
   if (previewPx) return;
-  const base64 = AVATARS.find((a) => a);
-  if (!base64) return;
-  const bin = atob(base64);
+  const slot = AVATARS.findIndex((a) => a);
+  if (slot < 0) return;
+  const bin = atob(AVATARS[slot]);
   if (bin.length < AVATAR_BYTES) return;
-  const work = AVA * SLIC_WORK_SCALE, scale = SLIC_WORK_SCALE;
+  const colors = slotPalette(slot);
+  const work = AVA * AVA_WORK_SCALE, scale = AVA_WORK_SCALE;
   previewPx = new Uint8ClampedArray(work * work * 4);
   for (let y = 0; y < work; y++){
     for (let x = 0; x < work; x++){
       const cell = ((y / scale) | 0) * AVA + ((x / scale) | 0);
       const byte = bin.charCodeAt(cell >> 1);
       const index = (cell % 2 === 0) ? (byte >> 4) : (byte & 0x0F);
-      const p = PALETTE[index] || [0, 0, 0];
+      const p = colors[index] || [0, 0, 0];
       const o = (y * work + x) * 4;
       previewPx[o] = p[0]; previewPx[o + 1] = p[1]; previewPx[o + 2] = p[2]; previewPx[o + 3] = 255;
     }
   }
-  previewSourceNote = "（当前源：设备上已有的那张自定义头像；选一张新照片后会换成它）";
+  previewSourceNote = "（当前用的是设备上已有的头像）";
 }
 
 // 设备回传的 4bpp base64 -> 可直接显示的 data URI(选择器里的缩略图)
-function avatarThumb(base64){
+function avatarThumb(base64, paletteBase64){
   if(!base64) return TRANSPARENT_PX;
   const bin = atob(base64);
   if(bin.length < AVATAR_BYTES) return TRANSPARENT_PX;
+  const colors = paletteOf(paletteBase64) || PALETTE;
 
   const canvas = document.createElement("canvas");
   canvas.width = AVA; canvas.height = AVA;
@@ -193,7 +244,7 @@ function avatarThumb(base64){
   for(let i = 0; i < AVA * AVA; i++){
     const byte = bin.charCodeAt(i >> 1);
     const idx = (i % 2 === 0) ? (byte >> 4) : (byte & 0x0F);
-    const p = PALETTE[idx] || [0, 0, 0];
+    const p = colors[idx] || [0, 0, 0];
     img.data[i*4] = p[0]; img.data[i*4 + 1] = p[1]; img.data[i*4 + 2] = p[2];
     img.data[i*4 + 3] = 255;
   }
@@ -206,8 +257,9 @@ function avatarThumb(base64){
 // 否则预览会显示成一个空白头像,和真机对不上。
 function iconSrc(idx){
   if(idx < ICONS.length) return ICONS[idx].data;
-  const data = AVATARS[idx - ICONS.length];
-  return data ? avatarThumb(data) : ICONS[0].data;
+  const slot = idx - ICONS.length;
+  const data = AVATARS[slot];
+  return data ? avatarThumb(data, AVATAR_PALETTES[slot]) : ICONS[0].data;
 }
 
 function iconLabel(idx){
@@ -223,7 +275,7 @@ function setAvatarImg(el, idx){
 }
 
 async function uploadAvatar(slot, file){
-  const bytes = await compressAvatar(file, avatarParams);
+  const bytes = await compressAvatar(file, avatarKernelParams());
   lastAvatarUpload = { slot: slot, file: file };   // 让"用当前参数重新上传"可用
   const again = byId("advReupload");
   if (again) again.hidden = false;
@@ -487,7 +539,7 @@ function iconPicker(container, onPick, selected, onAvatarChanged){
     btn.title = iconLabel(i);
     btn.innerHTML = (custom && !uploaded)
       ? '<span class="plus">＋</span>'
-      : `<img class="${custom ? "rounded" : ""}" src="${custom ? avatarThumb(AVATARS[slot]) : ICONS[i].data}" alt="">`;
+      : `<img class="${custom ? "rounded" : ""}" src="${custom ? avatarThumb(AVATARS[slot], AVATAR_PALETTES[slot]) : ICONS[i].data}" alt="">`;
     btn.onclick = () => {
       // 空的自定义槽位：点一下直接选图，省掉"先选中再上传"的两步
       if(custom && !uploaded){
@@ -512,7 +564,7 @@ function iconPicker(container, onPick, selected, onAvatarChanged){
     bar.innerHTML =
       `<button type="button" class="ghost" data-act="up">${AVATARS[slot] ? "替换图片" : "上传图片"}</button>`
       + (AVATARS[slot] ? '<button type="button" class="ghost" data-act="clear">清除</button>' : "")
-      + '<span class="muted">会压成 40×40、量化到设备那 16 色后存进去</span>';
+      + '<span class="muted">会压成 40×40，并按"照片像素化强度"那一档（或高级参数）取色后存进去</span>';
 
     bar.querySelector('[data-act="up"]').onclick = () => pickAvatarFile(async (file) => {
       await uploadAvatar(slot, file);
@@ -777,6 +829,7 @@ async function load(){
   const state = await api("/api/state");
   model = JSON.parse(JSON.stringify(state.config));
   AVATARS = state.avatars || new Array(AVATAR_MAX).fill("");
+  AVATAR_PALETTES = state.avatar_palettes || new Array(AVATAR_MAX).fill("");
   byId("deviceName").textContent = state.deviceName;
   // 先吃时间与电量，预览里的对时文案和右上角电量才不会先渲染成占位符。
   renderTimeAndNet(state);
@@ -840,6 +893,7 @@ async function removeSaved(ssid){
 async function refreshAvatars(){
   const state = await api("/api/state");
   AVATARS = state.avatars || AVATARS;
+  AVATAR_PALETTES = state.avatar_palettes || AVATAR_PALETTES;
   renderAll();
 }
 
@@ -925,15 +979,22 @@ byId("apOff").onclick = async () => {
   }catch(e){ toast("操作失败：" + e.message); }
 };
 /* ---------- 高级参数的事件 ---------- */
-// 选档位 = 把预设抄进滑块；动滑块 = 变成"自定义"档。
+// 第一个人头像下面的入口：展开共用的高级参数面板并滚过去。面板只有一份，这里只翻它的
+// open 状态，不复刻 DOM（复制第二份会让 advSyncLabels 认的两套 id 分叉）。
+byId("advOpenA").onclick = () => {
+  byId("advBox").open = true;
+  byId("advBox").scrollIntoView({ behavior: "smooth", block: "start" });
+};
+// 选档位 = 把预设抄进五个旋钮；动任一旋钮 = 变成"自定义"档。
 byId("avatarStrength").onchange = (e) => {
   advApplyPreset(e.target.value);
   if (e.target.value === "custom") byId("advBox").open = true;
 };
-byId("advStep").oninput = advFromInputs;
-byId("advIters").oninput = advFromInputs;
-byId("advWeight").oninput = advFromInputs;
-byId("advMode").onchange = advFromInputs;
+byId("advColors").oninput = advFromInputs;
+byId("advPalette").onchange = advFromInputs;
+byId("advSample").onchange = advFromInputs;
+byId("advAssign").onchange = advFromInputs;
+byId("advClean").oninput = advFromInputs;
 // 调参的闭环：改滑块 -> 直接重传刚才那张（参数就是滑块当前值）。
 byId("advReupload").onclick = async () => {
   if (!lastAvatarUpload){ toast("还没选过照片"); return; }
@@ -944,7 +1005,7 @@ byId("advReupload").onclick = async () => {
 };
 byId("advReset").onclick = () => {
   avatarParams = Object.assign({}, ADV_DEFAULTS);
-  byId("avatarStrength").value = DEFAULT_GEAR;
+  byId("avatarStrength").value = AVATAR_PRESET_DEFAULT;
   advSyncLabels();
   advSchedulePreview();
 };

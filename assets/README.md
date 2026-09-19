@@ -224,9 +224,11 @@ Store reusable source images and generated display assets in `images/`.
     which is why there is no second copy of the icon list), and
     `contact-sheet.png` plus `contact-sheet-zoom.png` (3× nearest-neighbour on a
     checkerboard) for manual review.
-- The palette order is the 4 bpp index order for uploaded custom avatars
-  (`PALETTE_ORDER`). **Changing it recolors every avatar already uploaded**, so it
-  is written out explicitly rather than relying on dict order.
+- The palette order is the fallback 4 bpp index order for uploaded custom avatars
+  (`PALETTE_ORDER`). Since per-photo palettes landed it is used only by avatars stored
+  before that change, by uploads that carry indices alone, and by the built-in icons —
+  but **changing it still recolours all of those**, so it is written out explicitly
+  rather than relying on dict order.
 - Avatar corner rounding: radius **4 px**, applied **only to uploaded custom avatars**
   (photos, which are full-bleed squares). The built-in icons are deliberately left
   alone. The test lives in one place, `ui_pixel_corner_cut()` in
@@ -247,40 +249,12 @@ Store reusable source images and generated display assets in `images/`.
   palette index while packing the image as I4, using the same
   `ui_pixel_corner_cut()` mask (the avatar palette has no transparent entry of its
   own, so one unused index is given alpha 0).
-- Avatar photos are **processed in the browser**; the device only ever receives
-  40×40, 800 bytes of 4 bpp index data (`POST /api/avatar`). The web side runs
-  `assets/web/avatar_slic.js`: centre-crop to a square, scale to a 240×240 working
-  image, cluster it into regions with **SLIC superpixels** (Lab colour plus
-  position), then let each 40×40 output cell take a majority vote and paint it with
-  that region's mean colour before mapping to the device's sixteen. Nearest-colour
-  per pixel turns a photo's gradients into a dot screen; merging by region first
-  makes the colour blocks follow the boundaries of a face, hair or background. The
-  three strengths (soft/standard/strong) set the superpixel granularity and the
-  iteration count. The kernel lives in its own file so a host test can run it
-  directly: `tests/test_avatar_slic.mjs` loads it with node's `vm` and asserts on
-  synthetic images, while `tools/gen_admin_page.py` inlines it into `admin.js` — a
-  page load still makes one `/admin.js` request.
-- **How much detail survives is decided by `step`, not by `mode`**: the larger the
-  grid spacing S is relative to the 6 px output cell, the more cells share one
-  region and therefore one colour — soft(8) is about 1.3 cells per region,
-  normal(14) about 2.3, strong(22) about 3.6. With only 1600 cells in a 40x40
-  output, normal leaves an effective spatial resolution of roughly 17x17. The
-  default is soft for that reason. This only became clear after the user reported
-  "no detail left at all", which had first been blamed on the iteration count.
-- `mode` decides **which colour that region gets** (four options):
-  **cell** averages the region's pixels *inside this cell* (the default: neighbouring
-  cells of one region follow the local shading, so detail comes back without the
-  speckle of per-pixel sampling); **center** samples the single original pixel at the
-  region's centre (what the reference implementation does — more contrast, but every
-  cell of a region still gets the same colour); **vote** takes the most common palette
-  colour inside the region; **mean** averages the whole region (the flattest, and the
-  only option at first — the one the user called "no detail at all").
-- The web page exposes step/iters/weight/mode in an advanced panel with a **live
-  preview** (the 40x40 result at 4x, drawn with the device's own sixteen colours,
-  recomputed within ~100 ms). The three strength presets are just combinations of
-  those numbers; touching a slider switches the preset to "custom". The preview
-  source is the photo just picked, or the existing custom avatar from the device
-  when no new photo has been chosen.
+- Avatar photos are **processed in the browser**; the device only stores and packs the
+  result. The kernel (`assets/web/avatar_pixel.js`) is host-tested through node's `vm` and
+  inlined into the admin page by `tools/gen_admin_page.py`, so a page load still makes one
+  `/admin.js` request. The algorithm, the five tunable knobs, the measured accuracy, and the
+  byte layouts of the upload and of the stored palette are documented in
+  [Avatar Pixelation](../docs/development/engineering/avatar-pixelation.md).
 - Conversion steps: run `python3 assets/images/love_pixel_art_gen.py` from the
   repository root. It reads `images/emoji/*.png`, so swapping an icon means editing
   the `EMOJI` list in the generator (name, label, code point); changing the art

@@ -146,15 +146,18 @@ Managed Components. They do not establish real timing, electrical behavior or
 device compatibility; the firmware gate compiles against the pinned dependencies.
 
 Pure logic on the web side is host-tested too: the avatar pixelation kernel
-(`assets/web/avatar_slic.js`) is a set of pure functions, and
-`tests/test_avatar_slic.mjs` loads **the code that ships** with node's `vm` and
-asserts on its output (flat colours stay flat, a two-tone image keeps a clean
-boundary, full transparency becomes white, the same input twice gives the same
-bytes, the three strengths behave monotonically, and the 4 bpp nibble order is
-right). It also parses `admin.js` with all four placeholders substituted, so a
-duplicate declaration or a broken parenthesis fails the gate. This one needs
-`node`: without it the gate prints `SKIP` and moves on rather than failing, which
-keeps "not run" visible in the log instead of silent.
+(`assets/web/avatar_pixel.js`) is a set of pure functions, and
+`tests/test_avatar_pixel.mjs` loads **the code that ships** with node's `vm` and
+asserts on its output (flat colours stay flat, a colour the device's sixteen cannot
+express is still recovered, a two-tone image keeps a clean boundary, full
+transparency becomes white, the same input twice gives the same bytes and the same
+palette, the colour count behaves monotonically, the isolated-cell cleanup removes
+speckle without eating a diagonal, and the 4 bpp nibble order plus the 64-byte
+little-endian palette are right). It also rounds-trips the palette through
+`packAvatarPalette()`/`paletteOf()`, and parses `admin.js` with all four
+placeholders substituted, so a duplicate declaration or a broken parenthesis fails
+the gate. This one needs `node`: without it the gate prints `SKIP` and moves on
+rather than failing, which keeps "not run" visible in the log instead of silent.
 
 To run an individual pure-logic test:
 

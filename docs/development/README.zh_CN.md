@@ -30,6 +30,7 @@
 - [wifi-provisioning.zh_CN.md](engineering/wifi-provisioning.zh_CN.md)：参考 BLUFI 分支实现蓝牙 Wi-Fi 配网，包含配套小程序名称及接入检查。
 - [serial-screenshot.zh_CN.md](engineering/serial-screenshot.zh_CN.md)：经串口控制台截屏与驱动界面（`shot`、`key`、`tools/screenshot.py`）。
 - [power-and-idle.zh_CN.md](engineering/power-and-idle.zh_CN.md)：熄屏、空闲深睡、按键唤醒源，以及怎么观察一台睡着的设备。
+- [avatar-pixelation.zh_CN.md](engineering/avatar-pixelation.zh_CN.md)：一张照片怎么变成 40×40 头像 —— 内核管线、五个可调旋钮、实测表现，以及线上格式周边的契约。
 
 ## CI（ci）
 

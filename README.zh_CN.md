@@ -2,11 +2,11 @@
   <a href="README.md"><strong>English</strong></a> · 简体中文
 </p>
 
-# 纪念日摆件 —— 像素风倒计时
+# 像素纪念日摆件 —— 数着在一起的日子
 
-本分支（`feature/love-countdown-pixel`）把 FoloToy AI Passport 做成一个成品应用：
+本分支（`feature/love-anniversary-pixel`）把 FoloToy AI Passport 做成一个成品应用：
 一块桌面摆件，正面数着"在一起多少天"，也数着接下来要过的每一个日子。不要账号、
-不依赖云服务、也不需要配套 App —— 倒计时全在设备上跑，配置页面由设备自己提供。
+不依赖云服务、也不需要配套 App —— 一切都在设备上运行，配置页面由设备自己提供。
 
 上游的平台说明仍在 [docs/README.zh_CN.md](docs/README.zh_CN.md)，本文只介绍本分支的固件。
 

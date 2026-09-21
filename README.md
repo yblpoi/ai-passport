@@ -2,12 +2,12 @@
   <a href="README.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# Love Countdown — pixel-art anniversary ornament
+# Pixel Anniversary Ornament — the days you share, on your desk
 
-This branch (`feature/love-countdown-pixel`) turns the FoloToy AI Passport board into one
+This branch (`feature/love-anniversary-pixel`) turns the FoloToy AI Passport board into one
 finished application: a desk ornament that counts the days since a couple's start date and
 down to the dates they care about. There is no account, no cloud service, and no companion
-app — the countdown runs on the device, and the device serves the page used to configure it.
+app — everything runs on the device, and the device serves the page used to configure it.
 
 Upstream's platform overview stays at [docs/README.md](docs/README.md). This file documents
 the firmware on this branch only.

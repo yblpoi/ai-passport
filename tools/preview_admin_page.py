@@ -39,6 +39,7 @@ MOCK_STATE = {
         "events": [
             {"name": "元旦", "icon": 12, "kind": 0, "date": "2026-01-01", "category": "节假日", "viewMode": 0},
             {"name": "情人节", "icon": 6, "kind": 0, "date": "2026-02-14", "viewMode": 0},
+            # 与 love_store.c 的出厂占位生日一致:假日期 + 占位名字。
             {"name": "咕咕嘎嘎", "icon": 10, "kind": 0, "date": "2000-01-01", "viewMode": 1},
             {"name": "国庆节", "icon": 7, "kind": 0, "date": "2026-10-01", "viewMode": 0},
             {"name": "圣诞节", "icon": 15, "kind": 0, "date": "2026-12-25", "viewMode": 0},

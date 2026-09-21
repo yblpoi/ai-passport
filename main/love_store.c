@@ -68,6 +68,7 @@ void love_config_defaults(love_config_t *cfg)
     memset(cfg, 0, sizeof(*cfg));
 
     // 与用户提供的截图一致:2000-01-01 在一起,默认两人 + 四个节日 + 一个生日。
+    // 名字与生日一律是占位值,不放任何真人的信息(见下面 DEFAULTS 的说明)。
     cfg->start.year = 2026;
     cfg->start.month = 8;
     cfg->start.day = 13;
@@ -79,21 +80,27 @@ void love_config_defaults(love_config_t *cfg)
 
     // 默认给四个固定的公历节日 + 生日,再补三个农历节日(春节/中秋/七夕),
     // 让"农历"这个能力一开机就能看见,不用用户自己去配。
+    //
+    // **出厂数据不放真人信息**:那条"生日"是名字「咕咕嘎嘎」+ 日期 2000-01-01,
+    // 一眼能看出是占位值(2000-01-01 是最常见的假生日)。它仍是"每年重复"的生日事件:
+    // 年份对按年折算不参与计算,存下来只是让后台页如实显示这个占位日期,主人第一次
+    // 打开后台就该把它改成自己的生日,或直接删掉。
     const struct {
         const char *name;
         uint8_t icon;
         love_event_kind_t kind;
+        int year;    // 0 = 沿用"在一起"的年份;按年重复/农历只用月日,只有"仅一次"真的读它
         int month;
         int day;
     } DEFAULTS[] = {
-        { "元旦",      LOVE_ICON_GIFT,        LOVE_EVENT_YEARLY, 1,  1 },
-        { "情人节",    LOVE_ICON_HEART,       LOVE_EVENT_YEARLY, 2,  14 },
-        { "咕咕嘎嘎",  LOVE_ICON_CAKE,        LOVE_EVENT_YEARLY, 7,  15 },
-        { "国庆节",    LOVE_ICON_STAR,        LOVE_EVENT_YEARLY, 10, 1 },
-        { "圣诞节",    LOVE_ICON_TREE,        LOVE_EVENT_YEARLY, 12, 25 },
-        { "春节",      LOVE_ICON_FIRECRACKER, LOVE_EVENT_LUNAR,  1,  1 },
-        { "中秋",      LOVE_ICON_RABBIT,      LOVE_EVENT_LUNAR,  8,  15 },
-        { "七夕",      LOVE_ICON_BOUQUET,     LOVE_EVENT_LUNAR,  7,  7 },
+        { "元旦",      LOVE_ICON_GIFT,        LOVE_EVENT_YEARLY, 0,    1,  1 },
+        { "情人节",    LOVE_ICON_HEART,       LOVE_EVENT_YEARLY, 0,    2,  14 },
+        { "咕咕嘎嘎",  LOVE_ICON_CAKE,        LOVE_EVENT_YEARLY, 2000, 1,  1 },
+        { "国庆节",    LOVE_ICON_STAR,        LOVE_EVENT_YEARLY, 0,    10, 1 },
+        { "圣诞节",    LOVE_ICON_TREE,        LOVE_EVENT_YEARLY, 0,    12, 25 },
+        { "春节",      LOVE_ICON_FIRECRACKER, LOVE_EVENT_LUNAR,  0,    1,  1 },
+        { "中秋",      LOVE_ICON_RABBIT,      LOVE_EVENT_LUNAR,  0,    8,  15 },
+        { "七夕",      LOVE_ICON_BOUQUET,     LOVE_EVENT_LUNAR,  0,    7,  7 },
     };
     const size_t count = sizeof(DEFAULTS) / sizeof(DEFAULTS[0]);
     for (size_t i = 0; i < count && i < LOVE_EVENT_MAX; i++) {
@@ -101,7 +108,7 @@ void love_config_defaults(love_config_t *cfg)
         love_utf8_copy(event->name, sizeof(event->name), DEFAULTS[i].name);
         event->icon = DEFAULTS[i].icon;
         event->kind = (uint8_t)DEFAULTS[i].kind;
-        event->date.year = cfg->start.year;
+        event->date.year = (int16_t)(DEFAULTS[i].year ? DEFAULTS[i].year : cfg->start.year);
         event->date.month = (int8_t)DEFAULTS[i].month;
         event->date.day = (int8_t)DEFAULTS[i].day;
         // 出厂默认进列表:一屏就能看到接下来几个日子,比一个事件一屏更适合新机。
@@ -597,4 +604,3 @@ esp_err_t love_store_clear_avatar(uint8_t slot)
     nvs_close(handle);
     return err;
 }
-

@@ -54,6 +54,11 @@ typedef struct {
 
 #define LOVE_CONFIG_VERSION 5u
 
+// 出厂起始日。它是"没有真人信息"的占位值:2000-01-01,与出厂那条占位生日同一个日期,
+// 一眼能看出不是真实的日子。**出厂的起始日与校验失败时的兜底共用它** —— 两处各写一遍
+// 数字,日后只改一处就会让真人的日期从另一边溜回来。
+#define LOVE_DEFAULT_START_DATE ((love_date_t){ 2000, 1, 1 })
+
 // 落盘记录:版本号 + 配置。版本号是首字段,任何版本都能先把它读出来再决定怎么解释其余字节。
 typedef struct {
     uint32_t version;

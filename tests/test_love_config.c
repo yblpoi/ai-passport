@@ -327,6 +327,8 @@ static void test_sanitize_clamps_everything(void)
     love_config_sanitize(&cfg);
 
     assert(love_date_valid(cfg.start));
+    // 兜底用的就是出厂那条占位起始日,不是任何真人的日子。
+    assert(cfg.start.year == 2000 && cfg.start.month == 1 && cfg.start.day == 1);
     assert(strcmp(cfg.people[0].name, "我") == 0);
     assert(strcmp(cfg.people[1].name, "TA") == 0);
     assert(cfg.people[0].icon == 0 && cfg.people[1].icon == 0);

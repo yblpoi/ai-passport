@@ -1,8 +1,8 @@
 // tests/test_love_date.c —— 纪念日摆件日期逻辑的 host 测试。
 //
-// 参考日 2026-09-16(只是夹具日期,与出厂默认无关):
-// 在一起 35 天 / 元旦 107 天后 / 情人节 151 天后 / 圣诞节 100 天后 /
-// 国庆节 15 天后 / 另一条年度事件(7 月 15 日)302 天后。参考天数由 Python datetime 独立算出。
+// 参考日固定为 2026-09-16(只是夹具日期,与出厂默认无关):元旦 107 天后 /
+// 情人节 151 天后 / 圣诞节 100 天后 / 国庆节 15 天后 /
+// 另一条年度事件(7 月 15 日)302 天后。参考天数由 Python datetime 独立算出。
 #include <assert.h>
 #include <string.h>
 #include "love_date.h"
@@ -64,7 +64,7 @@ static void test_days_between_and_together(void)
     assert(love_days_together(date(2026, 9, 16), date(2026, 9, 15)) == 0);
 }
 
-static void test_next_occurrence_matches_screenshots(void)
+static void test_next_occurrence_reference_days(void)
 {
     love_date_t today = date(2026, 9, 16);
 
@@ -189,7 +189,7 @@ int main(void)
     test_civil_conversion();
     test_calendar_rules();
     test_days_between_and_together();
-    test_next_occurrence_matches_screenshots();
+    test_next_occurrence_reference_days();
     test_next_occurrence_leap_fallback();
     test_event_countdown();
     test_format_and_epoch();

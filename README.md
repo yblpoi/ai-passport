@@ -155,9 +155,9 @@ chose.
 | Bluetooth serial | Off |
 
 The factory configuration deliberately carries no real personal data. Both names are
-placeholders, and the birthday entry is a date nobody would take for a real birthday
-(2000-01-01) — replace it with your own birthday, or delete the row, the first time you open
-the admin page. Nothing in this repository contains Wi-Fi credentials, device QR secrets, or
+placeholders, and the start date and the birthday entry use the same obviously-fake date,
+2000-01-01 — replace them with your own the first time you open the admin page, or delete the
+birthday row. Nothing in this repository contains Wi-Fi credentials, device QR secrets, or
 uploaded photos; those live in the device's own NVS partition.
 
 ## Build, flash, and test

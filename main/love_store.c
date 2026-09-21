@@ -67,11 +67,10 @@ void love_config_defaults(love_config_t *cfg)
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
 
-    // 与用户提供的截图一致:2000-01-01 在一起,默认两人 + 四个节日 + 一个生日。
-    // 名字与生日一律是占位值,不放任何真人的信息(见下面 DEFAULTS 的说明)。
-    cfg->start.year = 2026;
-    cfg->start.month = 8;
-    cfg->start.day = 13;
+    // 出厂数据全部是占位值,不放任何真人的信息:起始日固定 2000-01-01(与下面那条
+    // 占位生日同一个"一眼假"的日期,常量在 love_config.h),名字用咕咕/嘎嘎,
+    // 事件只用公共节日。
+    cfg->start = LOVE_DEFAULT_START_DATE;
 
     love_utf8_copy(cfg->people[0].name, sizeof(cfg->people[0].name), "咕咕");
     cfg->people[0].icon = LOVE_ICON_BIRD;

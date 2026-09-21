@@ -35,7 +35,7 @@ void love_config_sanitize(love_config_t *cfg)
     if (!cfg) return;
 
     if (!love_date_valid(cfg->start)) {
-        cfg->start = (love_date_t){ 2000, 1, 1 };
+        cfg->start = LOVE_DEFAULT_START_DATE;
     }
     for (size_t i = 0; i < LOVE_PERSON_MAX; i++) {
         cfg->people[i].name[LOVE_NAME_MAX - 1] = '\0';

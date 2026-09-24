@@ -169,7 +169,45 @@ static void build_ap_identity(char *ssid, size_t ssid_size, char *pass, size_t p
     }
 }
 
-static void apply_mode(void)
+static const char *mode_text(wifi_mode_t mode)
+{
+    switch (mode) {
+    case WIFI_MODE_NULL:  return "无射频";
+    case WIFI_MODE_STA:   return "STA";
+    case WIFI_MODE_AP:    return "AP";
+    case WIFI_MODE_APSTA: return "APSTA";
+    default:              return "未知";
+    }
+}
+
+// 上一次 apply_mode() 失败还没恢复。失败的那一次不打成 panic(见 apply_mode),而是
+// 置上它、由 1 秒心跳重试;错误只报第一次,免得重试把串口刷满。
+static volatile bool s_mode_dirty;
+
+static void note_mode_failure(esp_err_t err, wifi_mode_t to)
+{
+    if (!s_mode_dirty) {
+        ESP_LOGE(TAG, "Wi-Fi 模式没能切到 %s: %s —— 每秒重试",
+                 mode_text(to), esp_err_to_name(err));
+    }
+    s_mode_dirty = true;
+}
+
+static void note_mode_ok(wifi_mode_t mode)
+{
+    if (s_mode_dirty) {
+        ESP_LOGW(TAG, "Wi-Fi 模式先前的切换失败已恢复,现在是 %s", mode_text(mode));
+    }
+    s_mode_dirty = false;
+}
+
+// 把"意图"(s_ap_requested / 有没有凭据)落到驱动模式上。返回错误码,由调用方决定怎么讲。
+//
+// **为什么不是 ESP_ERROR_CHECK**:这条路径会在用户按下设置页"后台热点"那一刻从 input
+// 任务上跑,而同一时刻选网很可能正在扫描 —— 驱动拒绝一次模式切换就把整台设备重启,
+// 现场表现正是"按了没反应,热点还是关的",而且重启把日志线索也一起带走了。
+// 现在失败只记一条 error + 置脏位,交给 love_net_poll 每秒重试一次(用户那次点击不会丢)。
+static esp_err_t apply_mode(void)
 {
     wifi_mode_t mode = WIFI_MODE_NULL;
     if (s_ap_requested) {
@@ -188,26 +226,47 @@ static void apply_mode(void)
     if (mode == WIFI_MODE_NULL) {
         // 没有热点需求也没有凭据:停掉射频省电,后台仍可通过设置页重新开热点。
         if (s_wifi_started) {
-            esp_wifi_stop();
+            const esp_err_t err = esp_wifi_stop();
+            if (err != ESP_OK) {
+                note_mode_failure(err, WIFI_MODE_NULL);
+                return err;
+            }
             s_wifi_started = false;
         }
+        note_mode_ok(WIFI_MODE_NULL);
         s_state = LOVE_NET_IDLE;
-        return;
+        return ESP_OK;
     }
 
     if (!s_wifi_started) {
-        ESP_ERROR_CHECK(esp_wifi_set_mode(mode));
-        ESP_ERROR_CHECK(esp_wifi_start());
+        esp_err_t err = esp_wifi_set_mode(mode);
+        if (err == ESP_OK) err = esp_wifi_start();
+        if (err != ESP_OK) {
+            note_mode_failure(err, mode);
+            return err;
+        }
         s_wifi_started = true;
-        return;
+        ESP_LOGI(TAG, "Wi-Fi 已启动(%s)", mode_text(mode));
+        note_mode_ok(mode);
+        return ESP_OK;
     }
 
     wifi_mode_t current = WIFI_MODE_NULL;
-    if (esp_wifi_get_mode(&current) != ESP_OK) return;
+    if (esp_wifi_get_mode(&current) != ESP_OK) {
+        note_mode_failure(ESP_FAIL, mode);
+        return ESP_FAIL;
+    }
     if (current != mode) {
         // 模式切换后由 WIFI_EVENT_STA_START 触发连接,这里不重复配置 STA。
-        ESP_ERROR_CHECK(esp_wifi_set_mode(mode));
+        const esp_err_t err = esp_wifi_set_mode(mode);
+        if (err != ESP_OK) {
+            note_mode_failure(err, mode);
+            return err;
+        }
+        ESP_LOGI(TAG, "Wi-Fi 模式已切换: %s → %s", mode_text(current), mode_text(mode));
     }
+    note_mode_ok(mode);
+    return ESP_OK;
 }
 
 static void start_ap_profile(void)
@@ -612,14 +671,18 @@ esp_err_t love_net_ap_start(void)
 
     // 手动打开 = 撤销那道闸,并写回 NVS:用户要热点这件事重启后也成立。
     // 只在闸真的关着时写,免得每次启动流程(wifi clear 也走这里)都动一次 NVS。
+    const bool gate_cleared = s_ap_manual_off;
     if (s_ap_manual_off) {
         s_ap_manual_off = false;
         (void)love_store_save_ap_off(false);
     }
     s_ap_requested = true;
     love_net_ap_touch();
-    apply_mode();
-    return ESP_OK;
+    // 这一条是"用户在设置页按下的那一下到底有没有到网络层"的唯一证据:按了没反应时先看
+    // 它在不在 —— 不在就是按键/行选择那一侧的事,在就看下面 apply_mode 的模式日志。
+    // (wifi clear 也会走这里,所以不说"手动",只说"开热点"。)
+    ESP_LOGI(TAG, "开热点%s", gate_cleared ? ",并撤销'手动关'的闸" : "");
+    return apply_mode();
 }
 
 esp_err_t love_net_ap_stop(void)
@@ -636,8 +699,9 @@ esp_err_t love_net_ap_stop(void)
         s_ap_manual_off = true;
         (void)love_store_save_ap_off(true);
     }
-    apply_mode();
-    return ESP_OK;
+    // 与 love_net_ap_start 成对:这条同样只在"有人动手"时出现(设置页、网页或控制台)。
+    ESP_LOGI(TAG, "手动关热点(此后不再自动开)");
+    return apply_mode();
 }
 
 // 新凭据写进列表:同名就地更新密码(保留原来的尝试顺序),新名字追加在后面。
@@ -679,7 +743,7 @@ esp_err_t love_net_set_credentials(const char *ssid, const char *pass)
     saved_unlock();
     if (err != ESP_OK) return err;
 
-    apply_mode();
+    (void)apply_mode();
     s_reselect_request = true;
     if (s_wifi_started && is_current) {
         // 断开会让 poll 看到 s_dropped,但这里已经明确要重选了,直接重来一轮更干脆。
@@ -721,7 +785,7 @@ esp_err_t love_net_forget_ssid(const char *ssid)
     if (err != ESP_OK) return err;
 
     const bool was_current = (strcmp(s_sta_ssid, ssid) == 0);
-    apply_mode();
+    (void)apply_mode();
     s_reselect_request = true;
     if (s_wifi_started && was_current) {
         s_self_disconnect_until = xTaskGetTickCount() + pdMS_TO_TICKS(SELF_DISCONNECT_QUIET_MS);
@@ -900,6 +964,9 @@ void love_net_poll(void)
         s_scan_ready = false;
         pick_from_scan();
     }
+    // 上一次模式切换失败(多半是撞上扫描/连接)就在这里补一次:用户按下的那一下不该被丢掉,
+    // 而"每秒最多一次 esp_wifi_set_mode"的代价可以忽略(错误只在第一次报,见 apply_mode)。
+    if (s_mode_dirty) (void)apply_mode();
 
     /* ---- 推进当前候选 / 开始新一轮 ---- */
     const bool mid_attempt = (s_candidate >= 0);
@@ -946,7 +1013,7 @@ void love_net_poll(void)
             ESP_LOGW(TAG, "联网失败超过 %d 秒,自动打开热点作为入口",
                      AP_FALLBACK_AFTER_MS / 1000);
             s_ap_requested = true;
-            apply_mode();
+            (void)apply_mode();
         }
     } else {
         s_sta_down_since = 0;
@@ -965,6 +1032,6 @@ void love_net_poll(void)
     if (xTaskGetTickCount() > s_ap_deadline) {
         ESP_LOGI(TAG, "热点空闲超时,自动关闭");
         s_ap_requested = false;
-        apply_mode();
+        (void)apply_mode();
     }
 }

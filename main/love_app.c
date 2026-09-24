@@ -1520,6 +1520,9 @@ static void handle_settings_key(bsp_btn_t btn, bsp_btn_ev_t ev, action_t *action
         render();
     } else if (btn == BSP_BTN_OK) {
         *action = SETTING_ACTIONS[s_sel];
+        // 一行 info,只在按键时出现:现场排查"按了没反应"时,有它才能把"这一下没进来/
+        // 选错了行"和"动作执行失败"分开(设置页按下确定才记,不会周期刷屏)。
+        ESP_LOGI(TAG, "设置页:按下确定(第 %d 行)", s_sel);
     }
 }
 
@@ -1585,6 +1588,9 @@ void love_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         love_net_status_t net;
         love_net_get_status(&net);
         esp_err_t err = net.ap_active ? love_net_ap_stop() : love_net_ap_start();
+        // 屏幕上的提示 4 秒就没了,日志留得住:失败时把驱动给的原话也记下来
+        // (成功路径的"手动开/关热点"由 love_net 自己报,不在这里重复)。
+        if (err != ESP_OK) ESP_LOGW(TAG, "热点开关失败: %s", esp_err_to_name(err));
         // 关掉之后就不再自动开(见 love_net.h),这一点必须写在提示里 ——
         // 否则用户会一直等它自己回来,而它不会了。
         set_note_and_render(err == ESP_OK ? (net.ap_active ? "热点已关闭(不再自动开)"

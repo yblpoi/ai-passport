@@ -5,6 +5,7 @@
 #include "love_time.h"
 
 #include "esp_event.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -53,6 +54,17 @@ static bool s_ap_requested;
 // 开机自动开(见 love_net_init)与联网失败兜底(见 love_net_poll)。
 // 只有"手动开热点"和"清除凭据"能把它放下,并且会写回 NVS(重启后仍然不自动开)。
 static bool s_ap_manual_off;
+// 睡前那一瞬间"热点是不是开着"。深睡唤醒＝重启,内存里的 s_ap_requested 会没 ——
+// 只有 RTC 保留内存能把这个意图带过那一觉(工程里已有先例,见 power_sleep.c 的
+// s_deep_sleep_magic/s_deep_sleep_count)。写入点在 love_net_deinit():入睡前调用方
+// 一定会先停服务,那是本模块最后一次知道这个状态的时刻。
+//
+// magic 不是装饰:RTC 内存只在深睡唤醒时确定"原样保留",普通复位(看门狗、panic、
+// esp_restart)并不会重新初始化它 —— 裸 bool 会被上一次的残留值冒充成"睡前状态"。
+// 带上 magic 才分得开"没记过"和"记过,而且是 false"。
+#define AP_AT_SLEEP_MAGIC 0x41504F4EUL   // "APON"
+static RTC_DATA_ATTR uint32_t s_ap_at_sleep_magic;
+static RTC_DATA_ATTR bool s_ap_at_sleep_on;
 static love_net_state_t s_state = LOVE_NET_OFF;
 static char s_ip[16];
 static int s_rssi = -127;
@@ -591,10 +603,22 @@ esp_err_t love_net_init(void)
         // 例外是用户上次在设置页手动把它关了 —— 那是明确的意图,不再自动开;
         // 想找回来后仍旧是设置页那一个按钮(见 love_app.c 的 ACT_AP_TOGGLE)。
         s_ap_requested = !s_ap_manual_off;
+    } else if (!s_ap_manual_off && s_ap_at_sleep_magic == AP_AT_SLEEP_MAGIC &&
+               s_ap_at_sleep_on) {
+        // 深睡唤醒:睡前热点开着,就把它开回来。不做这件事的话,配过网的设备醒来后
+        // 要等"联网失败满 AP_FALLBACK_AFTER_MS(60 秒)"才由兜底开热点(见 love_net_poll),
+        // 而用户手动关过热点立下的那道闸一旦在,兜底就永远不开 —— 用户报的
+        // "睡一觉醒来三个入口全断"正是这条路径。
+        // 条件里的两个都要:闸优先,"手动关过"的意图比"睡前它开着"更强。
+        s_ap_requested = true;
+        ESP_LOGI(TAG, "睡前热点是开着的,按原样恢复(闸没立)");
     }
+    // 只认一次:这份快照说的是"上一次入睡前",不该在之后每一次重启里继续生效。
+    s_ap_at_sleep_magic = 0;
     love_net_ap_touch();
 
-    apply_mode();
+    // 失败不当场致命:上面那条日志照打,模式由心跳重试(见 apply_mode)。
+    (void)apply_mode();
     s_inited = true;
     // 有凭据就交给 poll 起第一轮选网(扫描 → 挑最强的那个;见 love_net_poll)。
     s_reselect_request = has_creds;
@@ -643,6 +667,10 @@ void love_net_deinit(void)
         vSemaphoreDelete(s_saved_lock);
         s_saved_lock = NULL;
     }
+    // 睡前状态抄进 RTC,再清内存里的那个:深睡唤醒＝重启,不抄就丢
+    // (读取与判据见 love_net_init 与 s_ap_at_sleep_magic 的说明)。
+    s_ap_at_sleep_on = s_ap_requested;
+    s_ap_at_sleep_magic = AP_AT_SLEEP_MAGIC;
     s_ap_requested = false;
     s_inited = false;
     s_state = LOVE_NET_OFF;

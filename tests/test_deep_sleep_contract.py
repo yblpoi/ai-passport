@@ -55,6 +55,7 @@ class DeepSleepContractTest(unittest.TestCase):
         cls.i2c = read("components/bsp/src/bsp_i2c.c")
         cls.power_sleep = read("main/power_sleep.c")
         cls.love_app = read("main/love_app.c")
+        cls.love_net = read("main/love_net.c")
 
     def test_es8311_force_sleep_sequence_is_complete_and_ordered(self) -> None:
         expected = [
@@ -153,6 +154,30 @@ class DeepSleepContractTest(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertLess(body.index("bsp_lvgl_lock(1000)"),
                         body.index("bsp_display_prepare_deep_sleep()"))
+
+    def test_hotspot_intent_survives_deep_sleep_and_the_gate_still_wins(self) -> None:
+        # 深睡唤醒＝重启:睡前开着热点的设备必须能自己把它开回来,否则配过网的用户醒来
+        # 要等 60 秒兜底(见 love_net_poll),而"手动关过"那道闸一旦立着,兜底永远不开
+        # ——那正是"睡一觉醒来三个入口全断"的用户现场。
+        # 快照只能落在 RTC 保留内存里:普通静态变量过不了这一觉。写入还必须**先记再清**,
+        # 顺序反了记下的就永远是 false。
+        self.assertRegex(self.love_net, r"RTC_DATA_ATTR\s+\w+\s+s_ap_at_sleep_\w+")
+
+        deinit = function_body(self.love_net, "love_net_deinit")
+        self.assertLess(deinit.index("s_ap_at_sleep_on = s_ap_requested;"),
+                        deinit.index("s_ap_requested = false;"))
+
+        # 恢复那一条的判据:magic 对得上、睡前确实是开的、而且没有手动关闭的闸。
+        # 三个条件少一个都会改变用户能看到的行为,所以逐个钉住(折叠换行后再比对)。
+        init = re.sub(r"\s+", " ", function_body(self.love_net, "love_net_init"))
+        self.assertIn(
+            "else if (!s_ap_manual_off && s_ap_at_sleep_magic == AP_AT_SLEEP_MAGIC "
+            "&& s_ap_at_sleep_on) {",
+            init,
+        )
+        self.assertIn("s_ap_requested = true;", init)
+        # 快照只认一次:留着它,之后每一次重启都会凭一份过期状态把热点开回来。
+        self.assertIn("s_ap_at_sleep_magic = 0;", init)
 
     def test_wake_source_is_armed_and_checked_before_the_teardown(self) -> None:
         # 唤醒源要**先武装、再关外设**,而且返回值必须被检查:官方参考文档记过一个坑 ——

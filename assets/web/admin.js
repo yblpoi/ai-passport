@@ -325,120 +325,20 @@ function pickAvatarFile(onDone){
   avatarInput.click();
 }
 
-/* 与设备 love_date.c 一致的规则：目标是“下一次发生日”，在一起天数含当天。 */
-function daysBetween(a, b){
-  const ms = Date.UTC(b.y, b.m-1, b.d) - Date.UTC(a.y, a.m-1, a.d);
-  return Math.round(ms / 86400000);
-}
-function parseDate(text){
-  if(!text) return null;
-  const p = text.split("-").map(Number);
-  if(p.length !== 3 || !p[0]) return null;
-  return {y:p[0], m:p[1], d:p[2]};
-}
-function todayFrom(epoch){
-  const d = new Date((epoch + 8*3600) * 1000);
-  return {y:d.getUTCFullYear(), m:d.getUTCMonth()+1, d:d.getUTCDate(),
-          hh:String(d.getUTCHours()).padStart(2,"0"), mm:String(d.getUTCMinutes()).padStart(2,"0")};
-}
-function daysInMonth(y,m){ return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
-function nextOccurrence(today, month, day){
-  const clamp = (y)=>Math.min(day, daysInMonth(y, month));
-  let cand = {y:today.y, m:month, d:clamp(today.y)};
-  if(daysBetween(today, cand) >= 0) return cand;
-  return {y:today.y+1, m:month, d:clamp(today.y+1)};
-}
+// 倒计时与农历的判据和设备端是同一件事,内核单独成文(assets/web/preview_math.js),
+// 由生成器内联到这一行 —— 页面仍然只有 /admin.js 一个请求,而测试与维护都只有一份实现。
+__PREVIEW_MATH_JS__
 
 function currentToday(){
   return lastTime && lastTime.synced ? todayFrom(lastTime.epoch) : todayFrom(Math.floor(Date.now()/1000));
 }
 
-/* ---------- 农历(与设备端 love_lunar.c 同一张表、同一套算法) ---------- */
-
-// 不用浏览器的 Intl 中国农历：实测 18 个年份里有 2 个(2027、2030)与权威日期差 ±1 天，
-// 拿它当预览依据会出现"网页说 02-07、设备说 02-06"。这里直接用设备端那张表。
-const LUNAR = __LUNAR_JSON__;
-const LUNAR_INFO = LUNAR.info.map((hex) => parseInt(hex, 16));
-const LUNAR_BASE = { y: LUNAR.baseYear, m: LUNAR.baseMonth, d: LUNAR.baseDay };
-
-const dayNumber = (y, m, d) => Math.round(Date.UTC(y, m - 1, d) / 86400000);
-const fromDayNumber = (n) => {
-  const dt = new Date(n * 86400000);
-  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
-};
-const lunarInRange = (y) => y >= LUNAR.baseYear && y < LUNAR.baseYear + LUNAR_INFO.length;
-
-function lunarLeapMonth(y){
-  return lunarInRange(y) ? (LUNAR_INFO[y - LUNAR.baseYear] & 0x0F) : 0;
-}
-function lunarPlainMonthDays(y, m){
-  return (LUNAR_INFO[y - LUNAR.baseYear] & (1 << (4 + m - 1))) ? 30 : 29;
-}
-function lunarLeapDays(y){
-  return (LUNAR_INFO[y - LUNAR.baseYear] & (1 << 16)) ? 30 : 29;
-}
-function lunarYearDays(y){
-  let days = 0;
-  for(let m = 1; m <= 12; m++) days += lunarPlainMonthDays(y, m);
-  const leap = lunarLeapMonth(y);
-  if(leap) days += lunarLeapDays(y);
-  return days;
-}
-
-// 农历 (year, month, day) -> 公历；day = 0 表示该月最后一天(除夕那种)。
-function lunarToSolar(ly, lm, ld){
-  if(!lunarInRange(ly) || lm < 1 || lm > 12) return null;
-
-  const leap = lunarLeapMonth(ly);
-  let offset = 0;
-  for(let m = 1; m < lm; m++){
-    offset += lunarPlainMonthDays(ly, m);
-    if(leap === m) offset += lunarLeapDays(ly);   // 闰月排在其月之后
-  }
-  const length = lunarPlainMonthDays(ly, lm);
-  const day = (ld === 0) ? length : ld;
-  if(day < 1 || day > length) return null;
-
-  let before = 0;
-  for(let y = LUNAR.baseYear; y < ly; y++) before += lunarYearDays(y);
-  return fromDayNumber(dayNumber(LUNAR_BASE.y, LUNAR_BASE.m, LUNAR_BASE.d)
-                       + before + offset + day - 1);
-}
-
-// 农历月日在 today 当天或之后的下一次发生日(含今天)。
-function nextLunar(today, lm, ld){
-  const from = dayNumber(today.y, today.m, today.d);
-  let best = null;
-  for(let ly = today.y - 1; ly <= today.y + 1; ly++){
-    const c = lunarToSolar(ly, lm, ld);
-    if(!c) continue;
-    const n = dayNumber(c.y, c.m, c.d);
-    if(n < from) continue;
-    if(!best || n < best.n) best = { n, ...c };
-  }
-  return best ? { y: best.y, m: best.m, d: best.d } : null;
-}
-
-const LUNAR_MONTHS = ["", "正月","二月","三月","四月","五月","六月",
-                      "七月","八月","九月","十月","冬月","腊月"];
-
-// 与设备端 love_lunar_format 一致:初八 / 十五 / 廿二 / 三十 / 月末
-function lunarName(month, day){
-  if(month < 1 || month > 12) return "农历";
-  if(day === 0) return `${LUNAR_MONTHS[month]}最后一天`;
-  const TENS = ["初", "十", "廿", "三"], UNITS = ["十","一","二","三","四","五","六","七","八","九"];
-  let dayName;
-  if(day === 10) dayName = "初十";
-  else if(day === 20) dayName = "二十";
-  else if(day === 30) dayName = "三十";
-  else dayName = TENS[Math.floor(day / 10)] + UNITS[day % 10];
-  return LUNAR_MONTHS[month] + dayName;
-}
-
 function renderPreview(){
   const today = currentToday();
   const start = parseDate(model.start);
-  byId("pvDays").textContent = start ? (daysBetween(start, today) + 1) : "--";
+  // 与设备端 love_days_together() 同一条规则:含起始日当天;今天早于起始日时是 0,
+  // 不显示负数。这条曾经和真机不一致,现在由 tests/vectors/date_vectors.json 钉住。
+  byId("pvDays").textContent = start ? Math.max(0, daysBetween(start, today) + 1) : "--";
   byId("pvStart").textContent = "起始日 " + (model.start || "----");
   // 设备主屏不再显示对时时间,只用单位那行标注时间状态。
   // 提示:设备侧还可能拿断电前的天数快照顶上,那种情况显示"天(未对时)",这里判断不到。

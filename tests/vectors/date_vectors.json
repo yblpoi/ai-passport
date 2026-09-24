@@ -1,0 +1,316 @@
+{
+  "note": "由 tools/gen_date_vectors.py 从设备端 C 实现(love_date.c / love_lunar.c)生成,不要手改;改规则请改 C 实现后重新生成。",
+  "cases": {
+    "events": [
+      {
+        "today": "2026-09-22",
+        "kind": "yearly",
+        "month": 1,
+        "day": 1,
+        "date": null,
+        "target": "2027-01-01",
+        "days": 101,
+        "resolved": true
+      },
+      {
+        "today": "2026-09-22",
+        "kind": "yearly",
+        "month": 12,
+        "day": 25,
+        "date": null,
+        "target": "2026-12-25",
+        "days": 94,
+        "resolved": true
+      },
+      {
+        "today": "2026-12-25",
+        "kind": "yearly",
+        "month": 12,
+        "day": 25,
+        "date": null,
+        "target": "2026-12-25",
+        "days": 0,
+        "resolved": true
+      },
+      {
+        "today": "2027-02-28",
+        "kind": "yearly",
+        "month": 2,
+        "day": 29,
+        "date": null,
+        "target": "2027-02-28",
+        "days": 0,
+        "resolved": true
+      },
+      {
+        "today": "2028-02-28",
+        "kind": "yearly",
+        "month": 2,
+        "day": 29,
+        "date": null,
+        "target": "2028-02-29",
+        "days": 1,
+        "resolved": true
+      },
+      {
+        "today": "2026-12-31",
+        "kind": "yearly",
+        "month": 1,
+        "day": 1,
+        "date": null,
+        "target": "2027-01-01",
+        "days": 1,
+        "resolved": true
+      },
+      {
+        "today": "2026-09-22",
+        "kind": "once",
+        "month": null,
+        "day": null,
+        "date": "2026-10-01",
+        "target": "2026-10-01",
+        "days": 9,
+        "resolved": true
+      },
+      {
+        "today": "2026-09-22",
+        "kind": "once",
+        "month": null,
+        "day": null,
+        "date": "2026-09-22",
+        "target": "2026-09-22",
+        "days": 0,
+        "resolved": true
+      },
+      {
+        "today": "2026-09-22",
+        "kind": "once",
+        "month": null,
+        "day": null,
+        "date": "2026-01-01",
+        "target": "2026-01-01",
+        "days": -264,
+        "resolved": true
+      },
+      {
+        "today": "2026-09-22",
+        "kind": "once",
+        "month": null,
+        "day": null,
+        "date": "1999-12-31",
+        "target": "1999-12-31",
+        "days": -9762,
+        "resolved": true
+      },
+      {
+        "today": "2026-09-22",
+        "kind": "lunar",
+        "month": 8,
+        "day": 15,
+        "date": null,
+        "target": "2026-09-25",
+        "days": 3,
+        "resolved": true
+      },
+      {
+        "today": "2026-01-01",
+        "kind": "lunar",
+        "month": 1,
+        "day": 1,
+        "date": null,
+        "target": "2026-02-17",
+        "days": 47,
+        "resolved": true
+      },
+      {
+        "today": "2026-02-10",
+        "kind": "lunar",
+        "month": 12,
+        "day": 0,
+        "date": null,
+        "target": "2026-02-16",
+        "days": 6,
+        "resolved": true
+      },
+      {
+        "today": "2018-01-01",
+        "kind": "lunar",
+        "month": 1,
+        "day": 1,
+        "date": null,
+        "target": "2018-02-16",
+        "days": 46,
+        "resolved": true
+      },
+      {
+        "today": "2050-06-01",
+        "kind": "lunar",
+        "month": 8,
+        "day": 15,
+        "date": null,
+        "target": "2050-09-30",
+        "days": 121,
+        "resolved": true
+      },
+      {
+        "today": "2051-01-01",
+        "kind": "lunar",
+        "month": 1,
+        "day": 1,
+        "date": null,
+        "target": null,
+        "days": null,
+        "resolved": false
+      }
+    ],
+    "days_together": [
+      {
+        "start": "2000-01-01",
+        "today": "2000-01-01",
+        "days": 1
+      },
+      {
+        "start": "2000-01-01",
+        "today": "2000-01-02",
+        "days": 2
+      },
+      {
+        "start": "2026-09-22",
+        "today": "2026-09-22",
+        "days": 1
+      },
+      {
+        "start": "2026-09-22",
+        "today": "2026-09-21",
+        "days": 0
+      },
+      {
+        "start": "2024-02-29",
+        "today": "2025-02-28",
+        "days": 366
+      },
+      {
+        "start": "2016-02-29",
+        "today": "2028-02-29",
+        "days": 4384
+      },
+      {
+        "start": "2000-01-01",
+        "today": "2099-12-31",
+        "days": 36525
+      }
+    ],
+    "lunar_solar": [
+      {
+        "year": 2026,
+        "month": 1,
+        "day": 1,
+        "solar": "2026-02-17"
+      },
+      {
+        "year": 2026,
+        "month": 8,
+        "day": 15,
+        "solar": "2026-09-25"
+      },
+      {
+        "year": 2026,
+        "month": 12,
+        "day": 0,
+        "solar": "2027-02-05"
+      },
+      {
+        "year": 2018,
+        "month": 1,
+        "day": 1,
+        "solar": "2018-02-16"
+      },
+      {
+        "year": 2050,
+        "month": 1,
+        "day": 1,
+        "solar": "2050-01-23"
+      },
+      {
+        "year": 2051,
+        "month": 1,
+        "day": 1,
+        "solar": null
+      },
+      {
+        "year": 2026,
+        "month": 13,
+        "day": 1,
+        "solar": null
+      },
+      {
+        "year": 2026,
+        "month": 1,
+        "day": 31,
+        "solar": null
+      }
+    ],
+    "lunar_names": [
+      {
+        "month": 1,
+        "day": 1,
+        "text": "正月初一"
+      },
+      {
+        "month": 1,
+        "day": 10,
+        "text": "正月初十"
+      },
+      {
+        "month": 1,
+        "day": 11,
+        "text": "正月十一"
+      },
+      {
+        "month": 1,
+        "day": 20,
+        "text": "正月二十"
+      },
+      {
+        "month": 1,
+        "day": 21,
+        "text": "正月二十一"
+      },
+      {
+        "month": 1,
+        "day": 29,
+        "text": "正月二十九"
+      },
+      {
+        "month": 8,
+        "day": 15,
+        "text": "八月十五"
+      },
+      {
+        "month": 12,
+        "day": 0,
+        "text": "腊月最后一天"
+      },
+      {
+        "month": 12,
+        "day": 30,
+        "text": "腊月三十"
+      },
+      {
+        "month": 8,
+        "day": 31,
+        "text": "八月"
+      },
+      {
+        "month": 0,
+        "day": 8,
+        "text": "农历"
+      },
+      {
+        "month": 13,
+        "day": 8,
+        "text": "农历"
+      }
+    ]
+  }
+}

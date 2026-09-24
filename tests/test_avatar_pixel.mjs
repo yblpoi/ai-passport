@@ -33,18 +33,24 @@ const DEVICE_PALETTE = ASSETS.palette.map((hex) => [
 assert.equal(DEVICE_PALETTE.length, 16, "设备调色板必须是 16 色");
 
 const KERNEL_SOURCE = fs.readFileSync(path.join(WEB, "avatar_pixel.js"), "utf8");
+const PREVIEW_MATH_SOURCE = fs.readFileSync(path.join(WEB, "preview_math.js"), "utf8");
 
 /* ---------- 1. 要发布的页面脚本必须能解析 ---------- */
 
 function renderedPageScript() {
   let script = fs.readFileSync(path.join(WEB, "admin.js"), "utf8");
   const icons = ASSETS.icons.map((i) => ({ label: i.label, data: i.data }));
+  const lunar = fs.readFileSync(path.join(ROOT, "assets/images/web/lunar.json"), "utf8").trim();
   script = script.replace("__ICONS_JSON__", JSON.stringify(icons));
   script = script.replace("__PALETTE_JSON__", JSON.stringify(DEVICE_PALETTE));
-  script = script.replace("__LUNAR_JSON__",
-                          fs.readFileSync(path.join(ROOT, "assets/images/web/lunar.json"), "utf8").trim());
+  script = script.replace("__LUNAR_JSON__", lunar);
+  script = script.replace("__PREVIEW_MATH_JS__",
+                          PREVIEW_MATH_SOURCE.replace("__LUNAR_JSON__", lunar).trim());
   script = script.replace("__AVATAR_PIXEL_JS__", KERNEL_SOURCE.trim());
-  assert.ok(!script.includes("__AVATAR_PIXEL_JS__"), "占位符没被替换掉");
+  for (const placeholder of ["__ICONS_JSON__", "__PALETTE_JSON__", "__LUNAR_JSON__",
+                             "__PREVIEW_MATH_JS__", "__AVATAR_PIXEL_JS__"]) {
+    assert.ok(!script.includes(placeholder), `占位符 ${placeholder} 没被替换掉`);
+  }
   return script;
 }
 

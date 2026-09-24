@@ -266,6 +266,15 @@ Store reusable source images and generated display assets in `images/`.
   web assets into `main/love_web_assets.h` (the raw background-tile PNG plus the page
   icon, served by `/bg.png` and by `/favicon.ico` and `/apple-touch-icon*.png`) and
   `main/love_admin_page.h` (HTML/CSS/JS, served as `/`, `/admin.css` and `/admin.js`).
+- Those three text resources are stored **gzip-compressed** and served with
+  `Content-Encoding: gzip`: 111,881 bytes of HTML/CSS/JS become 44,194 bytes in
+  flash, and the browser decompresses them (the device never has to). The page
+  sources on disk stay readable; only the PNG blobs are served verbatim.
+- The preview's countdown rules live in `assets/web/preview_math.js`, inlined the
+  same way as the avatar kernel. They are checked against
+  `tests/vectors/date_vectors.json`, which `tools/gen_date_vectors.py` generates by
+  running the device's own date and lunar code, so the page cannot drift from the
+  device unnoticed.
 - The web icons are **inlined into `admin.js`** as data URIs rather than served as
   `/icon/N.png`: all eighteen are 4,519 bytes as PNGs (6,452 bytes as data URIs),
   and splitting them into separate requests makes a single page load open a dozen

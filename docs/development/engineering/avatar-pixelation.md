@@ -18,7 +18,7 @@ come from; this document covers how a photo becomes an avatar.
 | --- | --- | --- |
 | Kernel | `assets/web/avatar_pixel.js` | Pure functions: histogram, palette, per-cell colour, cleanup, packing. No DOM. |
 | Page | `assets/web/admin.js` | Decode, centre-crop, call the kernel, live preview, upload. |
-| Build | `tools/gen_admin_page.py` | Inlines the kernel into `admin.js` and compiles both into `main/love_admin_page.h`. |
+| Build | `tools/gen_admin_page.py` | Inlines the kernel (and the preview kernel) into `admin.js`, then gzip-compresses all three text resources into `main/love_admin_page.h`. |
 | Device | `main/love_httpd.c`, `main/love_store.c` | Accept 864 or 800 bytes, store indices and palette, pack them for LVGL. |
 
 The kernel is a separate file so that `tests/test_avatar_pixel.mjs` can load **the code
@@ -197,11 +197,14 @@ device, and the running page and the repository silently disagree.
   (`node` 22, Apple silicon), depending on the settings and on whether the run is warm. The
   page's own live preview measured 3–15 ms in Chromium for the same work, which is what the
   "ms" readout under the preview shows.
-- **Served size**: `/admin.js` is 87791 bytes, against 66452 before this work. The device
-  serves it as a single response; measured on hardware it arrives in 0.36 s. Headroom is
-  finite — a 214923-byte response previously exceeded the socket send timeout over the
-  device's own access point, and that is why the page is split into `/`, `/admin.css` and
-  `/admin.js` rather than served as one document.
+- **Served size**: the page's three text resources are gzip-compressed in flash and sent
+  with `Content-Encoding: gzip`, so `/admin.js` costs 35171 bytes on the wire while the
+  inlined script is 89336 bytes uncompressed (87791 before the preview kernel moved into
+  its own file). The device serves each resource as a single response, measured on hardware
+  at 0.36 s for the uncompressed 87791-byte version. Headroom is finite — a 214923-byte
+  response previously exceeded the socket send timeout over the device's own access point,
+  and that is why the page is split into `/`, `/admin.css` and `/admin.js` rather than
+  served as one document.
 
 ## Known limits
 

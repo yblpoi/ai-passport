@@ -83,13 +83,20 @@ run_static_checks() (
     # 图标素材生成器：调色板 PNG 解码、降采样的取舍，以及"设备那张 16 色表一字不许改"
     # 这条不变量（新头像自带调色板，但老头像与内置图标仍然靠它，改了会让它们换色）。
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_love_pixel_art_gen.py
+    # 后台页生成器：生成物必须与 assets/web/* 同步(改页面忘了重新生成,固件里跑的是旧页面),
+    # 内嵌的 gzip 流往返一致,以及三份资源压缩后的体积不超预算。
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_gen_admin_page.py
     # 头像像素化（取色 + 上色）的内核是纯 JS，用 node 的 vm 直接跑要发布的那份代码。
     # 没装 node 就明确跳过并写出来——不让"没跑"看起来像"跑过了"。
     if command -v node >/dev/null 2>&1; then
         node tests/test_avatar_pixel.mjs
+        # 后台页预览内核：拿设备端 C 实现生成的向量核对 JS 那一份。
+        node tests/test_preview_math.mjs
     else
-        echo "SKIP: 没有 node，未运行 tests/test_avatar_pixel.mjs"
+        echo "SKIP: 没有 node，未运行 tests/test_avatar_pixel.mjs 与 tests/test_preview_math.mjs"
     fi
+    # 预览向量必须与设备端实现同步(改了 C 的规则就要重新生成,否则两边会各说各话)。
+    PYTHONDONTWRITEBYTECODE=1 python3 tools/gen_date_vectors.py --check
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py

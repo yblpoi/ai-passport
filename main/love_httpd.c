@@ -331,11 +331,17 @@ static esp_err_t finish(httpd_req_t *req)
 
 // cacheable=true 用于内容随固件固定的资源(底纹、图标):给一小时缓存。
 // HTML/CSS/JS 不缓存,免得重新烧录后浏览器还按旧脚本发请求。
-static esp_err_t send_blob(httpd_req_t *req, const char *type, const void *data,
-                           size_t length, bool cacheable)
+//
+// encoding 非空时按该编码声明 Content-Encoding。页面三件套在固件里存的就是 gzip 流
+// (见 tools/gen_admin_page.py):三份合计 111884 字节压到 43523 字节,省下约 68 KB
+// flash,而且单次响应变小也直接减轻了 lwIP 找连续内存的压力 —— 设备侧不解压,浏览器解。
+// 代价是这三条路径只接受会 gzip 的客户端(浏览器都满足;裸 curl 要加 --compressed)。
+static esp_err_t send_blob(httpd_req_t *req, const char *type, const char *encoding,
+                           const void *data, size_t length, bool cacheable)
 {
     note_client_activity();
     httpd_resp_set_type(req, type);
+    if (encoding) httpd_resp_set_hdr(req, "Content-Encoding", encoding);
     httpd_resp_set_hdr(req, "Cache-Control",
                        cacheable ? "public, max-age=3600" : "no-store");
 
@@ -356,33 +362,33 @@ static esp_err_t send_blob(httpd_req_t *req, const char *type, const void *data,
     return httpd_resp_send_chunk(req, NULL, 0);   // 结束分块传输
 }
 
-// 页面、样式与脚本各自一个请求,都只有几 KB。设备预览的字形用浏览器自己的
-// 系统字体:内嵌那份像素字体子集要 122 KB,是页面的二十倍,得不偿失。
+// 页面、样式与脚本各自一个请求,发出去的都是 gzip 流(总共 43 KB 上下)。设备预览的
+// 字形用浏览器自己的系统字体:内嵌那份像素字体子集要 122 KB,是页面的二十倍,得不偿失。
 static esp_err_t handle_page(httpd_req_t *req)
 {
     love_net_ap_touch();
-    return send_blob(req, "text/html; charset=utf-8",
-                     LOVE_ADMIN_HTML, LOVE_ADMIN_HTML_SIZE, false);
+    return send_blob(req, "text/html; charset=utf-8", "gzip",
+                     LOVE_ADMIN_HTML_GZ, LOVE_ADMIN_HTML_GZ_SIZE, false);
 }
 
 static esp_err_t handle_css(httpd_req_t *req)
 {
     love_net_ap_touch();
-    return send_blob(req, "text/css; charset=utf-8",
-                     LOVE_ADMIN_CSS, LOVE_ADMIN_CSS_SIZE, false);
+    return send_blob(req, "text/css; charset=utf-8", "gzip",
+                     LOVE_ADMIN_CSS_GZ, LOVE_ADMIN_CSS_GZ_SIZE, false);
 }
 
 static esp_err_t handle_js(httpd_req_t *req)
 {
     love_net_ap_touch();
-    return send_blob(req, "application/javascript; charset=utf-8",
-                     LOVE_ADMIN_JS, LOVE_ADMIN_JS_SIZE, false);
+    return send_blob(req, "application/javascript; charset=utf-8", "gzip",
+                     LOVE_ADMIN_JS_GZ, LOVE_ADMIN_JS_GZ_SIZE, false);
 }
 
 static esp_err_t handle_bg(httpd_req_t *req)
 {
     love_net_ap_touch();
-    return send_blob(req, "image/png", LOVE_WEB_BG_PNG, LOVE_WEB_BG_PNG_SIZE, true);
+    return send_blob(req, "image/png", NULL, LOVE_WEB_BG_PNG, LOVE_WEB_BG_PNG_SIZE, true);
 }
 
 // /favicon.ico 与 /apple-touch-icon*.png —— 浏览器在解析页面时自己去取这两个路径,
@@ -390,7 +396,7 @@ static esp_err_t handle_bg(httpd_req_t *req)
 static esp_err_t handle_page_icon(httpd_req_t *req)
 {
     love_net_ap_touch();
-    return send_blob(req, "image/png", LOVE_WEB_PAGE_ICON_PNG,
+    return send_blob(req, "image/png", NULL, LOVE_WEB_PAGE_ICON_PNG,
                      LOVE_WEB_PAGE_ICON_PNG_SIZE, true);
 }
 

@@ -135,8 +135,18 @@ cc -std=c11 -Wall -Wextra -Werror -Imain \
 杂色、设备那 16 色表达不出的颜色也能取到、两块颜色的边界干净、全透明给白、同一输入两次的
 索引与调色板都一致、取色数量单调、去孤立点能清掉散点又不吃斜线、4bpp 半字节顺序与 64 字节
 配色的十六进制布局），并把配色经 `packAvatarPalette()`/`paletteOf()` 走一遍来回一致；
-同时验证 `admin.js` 的四个占位符替换后能作为整段脚本解析。这一条需要 `node`：**没装 node
+同时验证 `admin.js` 的五个占位符替换后能作为整段脚本解析。这一条需要 `node`：**没装 node
 时脚本会打印 `SKIP` 并跳过**（不失败），所以本地/CI 的日志里会明确写出"没跑"。
+
+后台页的倒计时预览与设备端是同一套规则，所以它的判据不写人手期望值，而是直接对设备端。
+`tests/test_preview_math.mjs` 跑**要发布的**预览内核（`assets/web/preview_math.js`），
+逐条核对 `tests/vectors/date_vectors.json`；那份向量由 `tools/gen_date_vectors.py` 编译并
+运行设备端自己的 `love_date.c` 与 `love_lunar.c` 生成。`--check` 保证仓库里的向量仍然
+等于设备端实现——只改一边的规则会让门禁失败。
+
+`tests/test_gen_admin_page.py` 看着内嵌的后台页：生成的 `main/love_admin_page.h` 必须等于
+拿 `assets/web/*` 现场重渲染的结果（改了页面却没跑 `tools/gen_admin_page.py` 是常犯的错），
+每段 gzip 流解压后必须与设备真正要发的字节逐字节相同，压缩后的总量不许超过预算。
 
 统一验证入口：
 

@@ -196,6 +196,13 @@
   `main/love_web_assets.h`（底纹 PNG 与页面图标 PNG，分别由 `/bg.png`、
   `/favicon.ico`、`/apple-touch-icon*.png` 返回）与
   `main/love_admin_page.h`（HTML/CSS/JS，由 `/`、`/admin.css`、`/admin.js` 分别返回）。
+- 那三份文本资源以 **gzip 压缩**存储、响应带 `Content-Encoding: gzip`：HTML/CSS/JS
+  合计 111,881 字节压进 44,194 字节 flash，由浏览器解压（设备侧一个字节都不用解）。
+  磁盘上的页面源码仍然可读；只有 PNG 是原样下发的。
+- 预览用的倒计时规则在 `assets/web/preview_math.js`，与头像内核一样被内联进页面。
+  它的判据来自 `tests/vectors/date_vectors.json` —— 那份向量由
+  `tools/gen_date_vectors.py` 运行设备端自己的日期与农历代码生成，所以页面不会悄悄地
+  和设备说两套话。
 - 网页端图标**内联在 `admin.js` 里**（data URI），不做成 `/icon/N.png`：
   十八个图标的 PNG 合计 4,519 字节（data URI 6,452 字节），拆成独立请求会让一次
   页面加载多开十几条连接，把设备那点堆压到 Wi-Fi 驱动分不到发送帧。曾经让页面

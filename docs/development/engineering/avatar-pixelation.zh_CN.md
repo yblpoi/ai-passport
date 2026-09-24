@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | 内核 | `assets/web/avatar_pixel.js` | 纯函数：直方图、取色、逐格上色、清洗、打包。不碰 DOM。 |
 | 页面 | `assets/web/admin.js` | 解码、居中裁方、调用内核、实时预览、上传。 |
-| 构建 | `tools/gen_admin_page.py` | 把内核内联进 `admin.js`，再把两者编成 `main/love_admin_page.h`。 |
+| 构建 | `tools/gen_admin_page.py` | 把内核（以及预览内核）内联进 `admin.js`，再把三份文本资源 gzip 压缩进 `main/love_admin_page.h`。 |
 | 设备 | `main/love_httpd.c`、`main/love_store.c` | 收 864 或 800 字节、存索引与配色、打包给 LVGL。 |
 
 内核单独成文件，是为了让 `tests/test_avatar_pixel.mjs` 用 node 的 `vm` 加载**要发布的
@@ -166,8 +166,10 @@ python3 tools/gen_admin_page.py         # 改了 assets/web 之后必须跑
 - **内核耗时**：两张样张上每次转换从个位数到约 30 ms（node 22、Apple 芯片），取决于参数组合
   以及这次是不是热跑。页面自己的实时预览在 Chromium 里实测同样的活是 3–15 ms —— 预览下面那个
   "算完 X ms"读数就是它。
-- **下发体积**：`/admin.js` 是 87791 字节，这轮工作之前是 66452 字节。设备把它作为**一次响应**
-  发出；真机实测 0.36 秒到达。余量是有限的 —— 曾经一次 214923 字节的响应超过了设备热点上的
+- **下发体积**：页面那三份文本资源在固件里是 gzip 压缩的、响应带 `Content-Encoding: gzip`，
+  所以 `/admin.js` 上线只有 35171 字节，而内联后的脚本解压是 89336 字节（预览内核搬进
+  单独文件之前是 87791 字节）。设备把每份资源作为**一次响应**发出；真机实测未压缩的
+  87791 字节版本 0.36 秒到达。余量是有限的 —— 曾经一次 214923 字节的响应超过了设备热点上的
   socket 发送超时，页面之所以拆成 `/`、`/admin.css`、`/admin.js` 三个资源，原因就在这里。
 
 ## 已知边界

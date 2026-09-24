@@ -996,13 +996,241 @@ static void finish_with_hint(const char *hint)
 // render() 的每个调用点都在 LVGL 锁内,所以这块静态缓冲不会被并发改写。
 static setting_row_t s_setting_rows[SETTINGS_ROWS];
 
+// 六屏各自一个 builder。它们从前都挤在 render() 一个函数里:各分支声明的临时变量
+// (列表页那两行天数/单位、事件卡的大数字与单位、主屏的文本缓冲)会叠成**同一帧**,
+// 真机实测那帧 1056 字节 —— 而 console 任务走 `ble on` → love_app_set_ble → render
+// 这条路时只剩 1088 字节余量(见 s_render_request 的说明)。拆开以后帧按屏算,
+// 深度只和"这一屏自己要多少"有关,不再和六屏之和有关。
+//
+// 屏间共享的状态仍是本文件的 s_* 静态量,由 render() 统一在开头收敛、在结尾加载,
+// 所以这次拆分不引入任何新的跨文件接口。
+static void render_confirm(void)
+{
+    // 蓝牙危险命令的确认页。**用 24px 正文档**:这一页要"一眼看清要允许什么",
+    // 12px 在正常观看距离下偏小(真机反馈)。像素字体只有 12/24/36 三档,
+    // 非整数倍放大会让笔画不匀,所以放大就是换档,不能设字号。
+    // 动作文案最长的"写入新的 Wi-Fi 凭据"在 200px 宽下会折成两行,面板留了余量。
+    lv_obj_t *title = cjk_label(s_scr, "蓝牙请求", COL_WHITE);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 40);
+
+    lv_obj_t *panel = ui_pixel_panel_create(s_scr, 12, 84, 216, 132, UI_PAPER);
+    lv_obj_t *what = ui_pixel_label(panel, s_confirm_text ? s_confirm_text : "",
+                                    &s_font_24, UI_INK);
+    lv_obj_set_width(what, 200);
+    lv_label_set_long_mode(what, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(what, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(what, LV_ALIGN_CENTER, 0, 0);
+
+    finish_with_hint("确定 允许 · 长按确定 拒绝");
+}
+
+static void render_settings(void)
+{
+    int count = build_settings(s_setting_rows);
+    if (s_sel >= count) s_sel = count - 1;
+    if (s_sel < 0) s_sel = 0;
+
+    lv_obj_t *title = cjk_label(s_scr, "设置", COL_WHITE);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 30);
+
+    // 12px 字号下一行只要 22px,9 行也放得下,不必分页。
+    // 起始 y 与标题(24px,占 30..54)要留出明显间距,不然标题和内容粘在一起。
+    for (int i = 0; i < count; i++) {
+        int y = 72 + i * 24;
+        bool selected = i == s_sel;
+        if (selected) ui_pixel_block(s_scr, 10, y - 4, 220, 22, COL_WHITE);
+        lv_obj_t *label = cjk_small(s_scr, s_setting_rows[i].label,
+                                    selected ? COL_INK : COL_WHITE);
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 16, y);
+        lv_obj_t *value = cjk_small(s_scr, s_setting_rows[i].value,
+                                    selected ? COL_INK : COL_WHITE);
+        lv_obj_align(value, LV_ALIGN_TOP_RIGHT, -16, y);
+    }
+
+    // 提示行与主屏/事件卡一致用 12px;这里原先误用了 24px 的 cjk_label,
+    // 既是其它屏的两倍大,整行也几乎铺满 240px 屏宽。
+    finish_with_hint("上/下 选择 · 确定 执行");
+}
+
+static void render_status(void)
+{
+    build_status_page();
+    finish_with_hint("上/下 选择 · 确定 执行 · 长按返回");
+}
+
+// 返回 true = 这一屏画完了;false = 列表被后台改成空的,已把 s_view 收敛回主屏,
+// 由 render() 接着画主屏(与拆分前的 fall-through 语义一致)。
+static bool render_list(love_date_t today, bool holds)
+{
+    // "列表"事件可能在后台网页上被删光或被改成单页。此时不能停在一张空列表上。
+    if (s_list_count == 0) {
+        s_view = VIEW_MAIN;
+        return false;
+    }
+
+    build_page_label();
+
+    const int first = s_list_page * LIST_PAGE_ROWS;
+    for (int row = 0; row < LIST_PAGE_ROWS; row++) {
+        const int pos = first + row;
+        if (pos >= s_list_count) break;
+
+        const love_event_t *event = &s_cfg.events[s_list_order[pos]];
+        const int row_top = LIST_ROW_TOP + row * LIST_ROW_PITCH;
+
+        lv_obj_t *icon = lv_image_create(s_scr);
+        lv_image_set_src(icon, resolve_icon(event->icon));
+        lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 12, row_top + LIST_ROW_ICON_DY);
+
+        // 分类标签在下排左端(底块先铺,标签压在上面)。
+        if (event->category[0] != '\0') {
+            const int cat_w = category_width(event->category);
+            ui_pixel_block(s_scr, LIST_ROW_TEXT_X, row_top + LIST_ROW_LINE2_Y - 2,
+                           cat_w, 15, COL_WHITE);
+            lv_obj_t *cat = cjk_small(s_scr, event->category, COL_INK);
+            lv_label_set_long_mode(cat, LV_LABEL_LONG_CLIP);
+            lv_obj_set_width(cat, cat_w - 6);
+            lv_obj_align(cat, LV_ALIGN_TOP_LEFT, LIST_ROW_TEXT_X + 3,
+                         row_top + LIST_ROW_LINE2_Y);
+        }
+
+        lv_obj_t *name = cjk_label(s_scr, event->name, COL_WHITE);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(name, LIST_ROW_NAME_W);
+        lv_obj_align(name, LV_ALIGN_TOP_LEFT, LIST_ROW_TEXT_X,
+                     row_top + LIST_ROW_LINE1_Y);
+
+        // 天数:数字 24px 在右列上行,单位 12px 在右列下行(见文件头的行内坐标)。
+        // 24 字节:最坏情况是 int 的 11 位数字 + 结尾;实际日期被夹在 1970..2099,
+        // 最多 5 位数。
+        char days[24];
+        // 24 字节:最长的单位是"农历超出范围"(6 个汉字 = 18 字节 + 结尾)。
+        char unit[24];
+        format_row_days(days, sizeof(days), unit, sizeof(unit), event, today, holds);
+        lv_obj_t *day = cjk_label(s_scr, days, COL_WHITE);
+        lv_obj_align(day, LV_ALIGN_TOP_RIGHT, -12, row_top + LIST_ROW_LINE1_Y);
+        if (unit[0]) {
+            lv_obj_t *unit_obj = cjk_small(s_scr, unit, COL_WHITE);
+            lv_obj_align(unit_obj, LV_ALIGN_TOP_RIGHT, -12, row_top + LIST_ROW_LINE2_Y);
+        }
+    }
+
+    finish_with_hint("上/下 翻页 · 长按确定 设置");
+    return true;
+}
+
+static void render_main(void)
+{
+    // 两个人像移到标题上方并放大(40px 图标 + 24px 名字),人物先出场。
+    // 这一屏的纵向坐标:上方要避开右上角电量(它占到 y=18),下方要留出提示行,
+    // 整块下移到 y=56 起才既离电量够远、上下留白也均衡。改动时这几个值要一起动。
+    const int CENTERS[LOVE_PERSON_MAX] = { 62, 178 };
+    for (int i = 0; i < LOVE_PERSON_MAX; i++) {
+        lv_obj_t *person = ui_pixel_plain(s_scr);
+        lv_obj_set_pos(person, CENTERS[i] - 48, 56);
+        lv_obj_set_size(person, 96, 100);
+        lv_obj_set_style_bg_opa(person, LV_OPA_TRANSP, 0);
+
+        lv_obj_t *icon = lv_image_create(person);
+        lv_image_set_src(icon, resolve_icon(s_cfg.people[i].icon));
+        lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 0);
+
+        lv_obj_t *name = cjk_label(person, s_cfg.people[i].name, COL_WHITE);
+        // 名字可能长到 8 个汉字,超出人物块宽度时裁切而不是换行,避免挤压下方排版。
+        lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(name, 96);
+        // 标签被拉满整块宽度,不显式居中就会左对齐,和上面居中的图标错开。
+        lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 46);
+    }
+
+    lv_obj_t *title = cjk_label(s_scr, "在一起", COL_WHITE);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 142);
+
+    int32_t days = 0;
+    bool stale = false;
+    bool have_days = main_days(&days, &stale);
+    char number[16];
+    snprintf(number, sizeof(number), have_days ? "%d" : "--", (int)days);
+    add_big_number(number, 180);
+
+    // 大数字下方是单位。实时的写「天」,用断电快照的写「天(未对时)」,
+    // 完全没有可用值时写「未同步」—— 不拿旧数据冒充实时天数。
+    const char *unit = !have_days ? "未同步" : (stale ? "天(未对时)" : "天");
+    s_unit = cjk_small(s_scr, unit, COL_WHITE);
+    lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 218);
+
+    ui_pixel_block(s_scr, 60, 238, 120, 3, COL_SHADOW);
+
+    char text[48];
+    format_date_line(text, sizeof(text), "起始日", s_cfg.start);
+    lv_obj_t *date_obj = cjk_small(s_scr, text, COL_WHITE);
+    lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 250);
+
+    // 主屏是轮播的两端:下键进第 1 页(有单页事件时就是第一张单页卡),上键进
+    // 最后一页。提示跟着是否真的有页改,别让用户按下去以为走错了屏。
+    const char *main_hint = (page_total() > 0) ? "上/下 翻页 · 长按确定 设置"
+                                               : "长按确定 设置";
+    // 调试模式开着时把提示换掉:这一屏可能整晚亮着,得让人一眼看出是"故意不睡的"。
+    if (s_debug_mode) main_hint = "调试模式 · 不熄屏不深睡";
+    finish_with_hint(main_hint);
+}
+
+static void render_event_card(love_date_t today, bool holds)
+{
+    int index = s_view - 1;
+    if (index < 0) index = 0;
+    if (index >= s_cfg.event_count) index = s_cfg.event_count - 1;
+    const love_event_t *event = &s_cfg.events[index];
+
+    // 页码与列表页共用一套编号(见 build_page_label):单页卡是 1/total 这样的
+    // 整体序号,而不是"单页组里的第几条" —— 那样两套编号看不出前后关系。
+    build_page_label();
+
+    // 这一屏的纵向坐标同样整块下移过:内容只占 166px,原来从 y=40 起,
+    // 底部空出近百像素。现在从 68 起,上下留白各约 68px,和主屏、设置页一致。
+    lv_obj_t *icon_obj = lv_image_create(s_scr);
+    lv_image_set_src(icon_obj, resolve_icon(event->icon));
+    lv_obj_align(icon_obj, LV_ALIGN_TOP_MID, 0, 68);
+
+    lv_obj_t *name_obj = cjk_label(s_scr, event->name, COL_WHITE);
+    lv_label_set_long_mode(name_obj, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(name_obj, 224);
+    // 同主屏人像名:标签拉满宽度后必须显式居中,否则短名字会贴在左边。
+    lv_obj_set_style_text_align(name_obj, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_obj, LV_ALIGN_TOP_MID, 0, 120);
+
+    love_countdown_t countdown = { 0, true, true, event->date };
+    if (holds) countdown = love_event_countdown(event, today);
+
+    const bool lunar = (event->kind == LOVE_EVENT_LUNAR);
+    // 农历表覆盖不到的年份:说清楚"算不出来",不给假数字
+    const bool unresolved = holds && lunar && !countdown.resolved;
+
+    // 大数字与单位同出一处:没对时或农历超表时数字是 "--",不必在这里另写一次判据。
+    char number[24];
+    char unit[24];
+    countdown_text(number, sizeof(number), unit, sizeof(unit), &countdown, holds, "未同步");
+    add_big_number(number, 158);
+    s_unit = cjk_small(s_scr, unit, COL_WHITE);
+    lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 200);
+
+    char date_text[48];
+    format_event_line(date_text, sizeof(date_text), event, &countdown, unresolved);
+    lv_obj_t *date_obj = cjk_small(s_scr, date_text, COL_WHITE);
+    lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 222);
+
+    // 卡片上不再能改日期(日期一律在后台网页改),所以提示只说怎么走。
+    // 上一行提示(-28)与底部提示行(-6)不重叠,谁先画都不影响观感。
+    if (s_note[0]) {
+        lv_obj_t *note = cjk_small(s_scr, s_note, COL_WHITE);
+        lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -28);
+    }
+    finish_with_hint("上/下 翻页 · 长按确定 设置");
+}
+
 static void render(void)
 {
-    // 这几行文字/图标都是"建好即用",不进 refresh_dynamic,所以做成局部变量。
-    lv_obj_t *date_obj;
-    lv_obj_t *name_obj;
-    lv_obj_t *icon_obj;
-
     if (s_scr) {
         lv_obj_delete(s_scr);
         s_scr = NULL;
@@ -1046,224 +1274,32 @@ static void render(void)
     if (s_view != VIEW_STATUS) build_battery(s_scr);
 
     if (s_view == VIEW_CONFIRM) {
-        // 蓝牙危险命令的确认页。**用 24px 正文档**:这一页要"一眼看清要允许什么",
-        // 12px 在正常观看距离下偏小(真机反馈)。像素字体只有 12/24/36 三档,
-        // 非整数倍放大会让笔画不匀,所以放大就是换档,不能设字号。
-        // 动作文案最长的"写入新的 Wi-Fi 凭据"在 200px 宽下会折成两行,面板留了余量。
-        lv_obj_t *title = cjk_label(s_scr, "蓝牙请求", COL_WHITE);
-        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 40);
-
-        lv_obj_t *panel = ui_pixel_panel_create(s_scr, 12, 84, 216, 132, UI_PAPER);
-        lv_obj_t *what = ui_pixel_label(panel, s_confirm_text ? s_confirm_text : "",
-                                        &s_font_24, UI_INK);
-        lv_obj_set_width(what, 200);
-        lv_label_set_long_mode(what, LV_LABEL_LONG_WRAP);
-        lv_obj_set_style_text_align(what, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(what, LV_ALIGN_CENTER, 0, 0);
-
-        finish_with_hint("确定 允许 · 长按确定 拒绝");
+        render_confirm();
         return;
     }
 
     if (s_view == VIEW_SETTINGS) {
-        int count = build_settings(s_setting_rows);
-        if (s_sel >= count) s_sel = count - 1;
-        if (s_sel < 0) s_sel = 0;
-
-        lv_obj_t *title = cjk_label(s_scr, "设置", COL_WHITE);
-        lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 30);
-
-        // 12px 字号下一行只要 22px,9 行也放得下,不必分页。
-        // 起始 y 与标题(24px,占 30..54)要留出明显间距,不然标题和内容粘在一起。
-        for (int i = 0; i < count; i++) {
-            int y = 72 + i * 24;
-            bool selected = i == s_sel;
-            if (selected) ui_pixel_block(s_scr, 10, y - 4, 220, 22, COL_WHITE);
-            lv_obj_t *label = cjk_small(s_scr, s_setting_rows[i].label,
-                                        selected ? COL_INK : COL_WHITE);
-            lv_obj_align(label, LV_ALIGN_TOP_LEFT, 16, y);
-            lv_obj_t *value = cjk_small(s_scr, s_setting_rows[i].value,
-                                        selected ? COL_INK : COL_WHITE);
-            lv_obj_align(value, LV_ALIGN_TOP_RIGHT, -16, y);
-        }
-
-        // 提示行与主屏/事件卡一致用 12px;这里原先误用了 24px 的 cjk_label,
-        // 既是其它屏的两倍大,整行也几乎铺满 240px 屏宽。
-        finish_with_hint("上/下 选择 · 确定 执行");
+        render_settings();
         return;
     }
 
     if (s_view == VIEW_STATUS) {
-        build_status_page();
-        finish_with_hint("上/下 选择 · 确定 执行 · 长按返回");
+        render_status();
         return;
     }
 
     if (s_view == VIEW_LIST) {
-        // "列表"事件可能在后台网页上被删光或被改成单页。此时不能停在一张空列表上,
-        // 直接落回主屏(不 return,让下面主屏那条分支接着画)。
-        if (s_list_count == 0) {
-            s_view = VIEW_MAIN;
-        } else {
-            build_page_label();
-
-            const int first = s_list_page * LIST_PAGE_ROWS;
-            for (int row = 0; row < LIST_PAGE_ROWS; row++) {
-                const int pos = first + row;
-                if (pos >= s_list_count) break;
-
-                const love_event_t *event = &s_cfg.events[s_list_order[pos]];
-                const int row_top = LIST_ROW_TOP + row * LIST_ROW_PITCH;
-
-                lv_obj_t *icon = lv_image_create(s_scr);
-                lv_image_set_src(icon, resolve_icon(event->icon));
-                lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 12, row_top + LIST_ROW_ICON_DY);
-
-                // 分类标签在下排左端(底块先铺,标签压在上面)。
-                if (event->category[0] != '\0') {
-                    const int cat_w = category_width(event->category);
-                    ui_pixel_block(s_scr, LIST_ROW_TEXT_X, row_top + LIST_ROW_LINE2_Y - 2,
-                                   cat_w, 15, COL_WHITE);
-                    lv_obj_t *cat = cjk_small(s_scr, event->category, COL_INK);
-                    lv_label_set_long_mode(cat, LV_LABEL_LONG_CLIP);
-                    lv_obj_set_width(cat, cat_w - 6);
-                    lv_obj_align(cat, LV_ALIGN_TOP_LEFT, LIST_ROW_TEXT_X + 3,
-                                 row_top + LIST_ROW_LINE2_Y);
-                }
-
-                lv_obj_t *name = cjk_label(s_scr, event->name, COL_WHITE);
-                lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
-                lv_obj_set_width(name, LIST_ROW_NAME_W);
-                lv_obj_align(name, LV_ALIGN_TOP_LEFT, LIST_ROW_TEXT_X,
-                             row_top + LIST_ROW_LINE1_Y);
-
-                // 天数:数字 24px 在右列上行,单位 12px 在右列下行(见文件头的行内坐标)。
-                // 24 字节:最坏情况是 int 的 11 位数字 + 结尾;实际日期被夹在 1970..2099,
-                // 最多 5 位数。
-                char days[24];
-                // 24 字节:最长的单位是"农历超出范围"(6 个汉字 = 18 字节 + 结尾)。
-                char unit[24];
-                format_row_days(days, sizeof(days), unit, sizeof(unit), event, today, holds);
-                lv_obj_t *day = cjk_label(s_scr, days, COL_WHITE);
-                lv_obj_align(day, LV_ALIGN_TOP_RIGHT, -12, row_top + LIST_ROW_LINE1_Y);
-                if (unit[0]) {
-                    lv_obj_t *unit_obj = cjk_small(s_scr, unit, COL_WHITE);
-                    lv_obj_align(unit_obj, LV_ALIGN_TOP_RIGHT, -12, row_top + LIST_ROW_LINE2_Y);
-                }
-            }
-
-            finish_with_hint("上/下 翻页 · 长按确定 设置");
+        if (render_list(today, holds)) {
             return;
         }
     }
 
     if (s_view == VIEW_MAIN || s_cfg.event_count == 0) {
-        // 两个人像移到标题上方并放大(40px 图标 + 24px 名字),人物先出场。
-        // 这一屏的纵向坐标:上方要避开右上角电量(它占到 y=18),下方要留出提示行,
-        // 整块下移到 y=56 起才既离电量够远、上下留白也均衡。改动时这几个值要一起动。
-        const int CENTERS[LOVE_PERSON_MAX] = { 62, 178 };
-        for (int i = 0; i < LOVE_PERSON_MAX; i++) {
-            lv_obj_t *person = ui_pixel_plain(s_scr);
-            lv_obj_set_pos(person, CENTERS[i] - 48, 56);
-            lv_obj_set_size(person, 96, 100);
-            lv_obj_set_style_bg_opa(person, LV_OPA_TRANSP, 0);
-
-            lv_obj_t *icon = lv_image_create(person);
-            lv_image_set_src(icon, resolve_icon(s_cfg.people[i].icon));
-            lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 0);
-
-            lv_obj_t *name = cjk_label(person, s_cfg.people[i].name, COL_WHITE);
-            // 名字可能长到 8 个汉字,超出人物块宽度时裁切而不是换行,避免挤压下方排版。
-            lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
-            lv_obj_set_width(name, 96);
-            // 标签被拉满整块宽度,不显式居中就会左对齐,和上面居中的图标错开。
-            lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
-            lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 46);
-        }
-
-        lv_obj_t *title = cjk_label(s_scr, "在一起", COL_WHITE);
-        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 142);
-
-        int32_t days = 0;
-        bool stale = false;
-        bool have_days = main_days(&days, &stale);
-        char number[16];
-        snprintf(number, sizeof(number), have_days ? "%d" : "--", (int)days);
-        add_big_number(number, 180);
-
-        // 大数字下方是单位。实时的写「天」,用断电快照的写「天(未对时)」,
-        // 完全没有可用值时写「未同步」—— 不拿旧数据冒充实时天数。
-        const char *unit = !have_days ? "未同步" : (stale ? "天(未对时)" : "天");
-        s_unit = cjk_small(s_scr, unit, COL_WHITE);
-        lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 218);
-
-        ui_pixel_block(s_scr, 60, 238, 120, 3, COL_SHADOW);
-
-        char text[48];
-        format_date_line(text, sizeof(text), "起始日", s_cfg.start);
-        date_obj = cjk_small(s_scr, text, COL_WHITE);
-        lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 250);
-
-        // 主屏是轮播的两端:下键进第 1 页(有单页事件时就是第一张单页卡),上键进
-        // 最后一页。提示跟着是否真的有页改,别让用户按下去以为走错了屏。
-        const char *main_hint = (page_total() > 0) ? "上/下 翻页 · 长按确定 设置"
-                                                   : "长按确定 设置";
-        // 调试模式开着时把提示换掉:这一屏可能整晚亮着,得让人一眼看出是"故意不睡的"。
-        if (s_debug_mode) main_hint = "调试模式 · 不熄屏不深睡";
-        finish_with_hint(main_hint);
+        render_main();
         return;
     }
 
-    // 事件卡
-    int index = s_view - 1;
-    if (index < 0) index = 0;
-    if (index >= s_cfg.event_count) index = s_cfg.event_count - 1;
-    const love_event_t *event = &s_cfg.events[index];
-
-    // 页码与列表页共用一套编号(见 build_page_label):单页卡是 1/total 这样的
-    // 整体序号,而不是"单页组里的第几条" —— 那样两套编号看不出前后关系。
-    build_page_label();
-
-    // 这一屏的纵向坐标同样整块下移过:内容只占 166px,原来从 y=40 起,
-    // 底部空出近百像素。现在从 68 起,上下留白各约 68px,和主屏、设置页一致。
-    icon_obj = lv_image_create(s_scr);
-    lv_image_set_src(icon_obj, resolve_icon(event->icon));
-    lv_obj_align(icon_obj, LV_ALIGN_TOP_MID, 0, 68);
-
-    name_obj = cjk_label(s_scr, event->name, COL_WHITE);
-    lv_label_set_long_mode(name_obj, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(name_obj, 224);
-    // 同主屏人像名:标签拉满宽度后必须显式居中,否则短名字会贴在左边。
-    lv_obj_set_style_text_align(name_obj, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(name_obj, LV_ALIGN_TOP_MID, 0, 120);
-
-    love_countdown_t countdown = { 0, true, true, event->date };
-    if (holds) countdown = love_event_countdown(event, today);
-
-    const bool lunar = (event->kind == LOVE_EVENT_LUNAR);
-    // 农历表覆盖不到的年份:说清楚"算不出来",不给假数字
-    const bool unresolved = holds && lunar && !countdown.resolved;
-
-    // 大数字与单位同出一处:没对时或农历超表时数字是 "--",不必在这里另写一次判据。
-    char number[24];
-    char unit[24];
-    countdown_text(number, sizeof(number), unit, sizeof(unit), &countdown, holds, "未同步");
-    add_big_number(number, 158);
-    s_unit = cjk_small(s_scr, unit, COL_WHITE);
-    lv_obj_align(s_unit, LV_ALIGN_TOP_MID, 0, 200);
-
-    char date_text[48];
-    format_event_line(date_text, sizeof(date_text), event, &countdown, unresolved);
-    date_obj = cjk_small(s_scr, date_text, COL_WHITE);
-    lv_obj_align(date_obj, LV_ALIGN_TOP_MID, 0, 222);
-
-    // 卡片上不再能改日期(日期一律在后台网页改),所以提示只说怎么走。
-    // 上一行提示(-28)与底部提示行(-6)不重叠,谁先画都不影响观感。
-    if (s_note[0]) {
-        lv_obj_t *note = cjk_small(s_scr, s_note, COL_WHITE);
-        lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -28);
-    }
-    finish_with_hint("上/下 翻页 · 长按确定 设置");
+    render_event_card(today, holds);
 }
 
 /* ---------- 定时刷新 ---------- */

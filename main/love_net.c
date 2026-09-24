@@ -254,13 +254,26 @@ static void start_candidate(size_t index)
     memcpy(config.sta.ssid, cred->ssid, strlen(cred->ssid));
     memcpy(config.sta.password, cred->pass, strlen(cred->pass));
     config.sta.threshold.authmode = WIFI_AUTH_OPEN;
-    (void)esp_wifi_set_config(WIFI_IF_STA, &config);
+    // 这一句的返回值必须看:一旦没写进去(密码长度不合法、驱动没就绪),接下来
+    // esp_wifi_connect() 用的还是上一轮的配置、甚至是空配置 —— assoc 必然失败,
+    // 而现场只剩一条语焉不详的 reason。这是"没有线索的失败",最贵的一种。
+    const esp_err_t cfg_err = esp_wifi_set_config(WIFI_IF_STA, &config);
+    if (cfg_err != ESP_OK) {
+        ESP_LOGE(TAG, "候选 \"%s\":写入凭据失败(%s),这次连接用的不是它",
+                 cred->ssid, esp_err_to_name(cfg_err));
+    }
 
     s_state = LOVE_NET_CONNECTING;
     const esp_err_t err = esp_wifi_connect();
-    if (err != ESP_OK && err != ESP_ERR_WIFI_CONN) {
+    if (err == ESP_ERR_WIFI_CONN) {
+        // 唯一被容忍的一种:它的意思是"驱动已经在连了",这次调用等于没发起 ——
+        // 本候选之后不会再有任何事件,只能等 poll 的 15 秒超时。poll 换候选前先
+        // disconnect() 正是为了避开它,所以它一出现就是"这一轮白跑一个候选"的线索。
+        ESP_LOGW(TAG, "候选 \"%s\":连接没能发起,驱动仍在连接中", cred->ssid);
+    } else if (err != ESP_OK) {
         // 连"发起连接"都失败(驱动还没就绪等),当作这个候选失败,交给 poll 推进 ——
         // 这里不能递归去试下一个:本函数可能跑在事件回调的栈上。
+        ESP_LOGW(TAG, "候选 \"%s\":发起连接失败(%s)", cred->ssid, esp_err_to_name(err));
         s_candidate_failed = true;
     }
 }
@@ -381,8 +394,13 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             // 刚才是我们自己 disconnect() 的(超时换候选/改凭据):这条事件报告的是
             // 我们自己的动作,不是候选失败 —— 记成失败会把下一个候选也一起跳掉。
         } else {
-            // 一次连接尝试失败:不在这里重连、也不打日志 —— 这正是原来"秒级重连 + 每条
-            // 一条 WARN"的刷屏来源。推进交给 poll,它按 15 秒超时换下一个候选。
+            // 一次连接尝试失败:不在这里重连、也不在这里推进状态机 —— 这正是原来
+            // "秒级重连 + 每条一条 WARN"的刷屏来源。但 **reason 必须留下**:它是唯一
+            // 能区分"找不到 AP(201)""认证失败(202)""关联失败(203)""握手超时(15/204)"
+            // 的证据,而这条事件过去之后就再也拿不到了。
+            // 用 info 而不是 warn,频率与"换候选"同阶:每轮每条候选最多一行,
+            // 轮与轮之间至少隔 30 秒(退避后更长),不会回到按秒刷屏。
+            ESP_LOGI(TAG, "候选 \"%s\" 连不上(原因 %d)", s_sta_ssid, reason);
             s_candidate_failed = true;
         }
         break;
@@ -842,7 +860,8 @@ void love_net_ap_touch(void)
 // 为什么连接节奏放在这里,而不是像原先那样在 STA_DISCONNECTED 回调里立刻
 // esp_wifi_connect():那个写法在"配过网但热点不在"时会以每秒一次的频率重连并
 // 各打一条 WARN,串口被刷屏(用户报的就是这个)。放到 1 秒心跳上之后,失败不再
-// 重连、也不再打日志,只有"换候选"和"整轮失败"两个转折点会出声。
+// 重连,日志也只跟着"每条候选一次尝试"走 —— 每次尝试至多一行(失败原因,或
+// "一个事件都没来"的超时),整轮再一行汇总,不再按秒刷屏。
 void love_net_poll(void)
 {
     if (!s_inited) return;
@@ -889,11 +908,18 @@ void love_net_poll(void)
          (now - s_candidate_since) > pdMS_TO_TICKS(CONNECT_TIMEOUT_MS))) {
         // 换候选之前先把这一次收掉:驱动可能还停在"正在连接"上(它自己的超时比我们长),
         // 此时下一次 esp_wifi_connect() 会返回 ESP_ERR_WIFI_CONN —— 那个错误在
-        // start_candidate 里被当成"已经在连了"忽略,于是新候选的配置写进去了、连接却
-        // 没发起,一整轮会白跑。disconnect() 在没有连接尝试时是无害的。
+        // start_candidate 里被当成"已经在连了"容忍掉(只留一条 WARN),于是新候选的
+        // 配置写进去了、连接却没发起,一整轮会白跑。disconnect() 在没有连接尝试时是无害的。
         if (s_wifi_started) {
             s_self_disconnect_until = now + pdMS_TO_TICKS(SELF_DISCONNECT_QUIET_MS);
             esp_wifi_disconnect();
+        }
+        // 超时收尾与"事件报告失败"在串口上必须分得开:上面那条 reason 日志只在真有事件
+        // 时出现,这里对应的是"15 秒里一个事件都没来"(连接根本没发起、或者驱动卡住)。
+        // 没有这一行,两种现场的日志长得一模一样。
+        if (!s_candidate_failed) {
+            ESP_LOGI(TAG, "候选 \"%s\":%d 秒内没收到任何连接事件,换下一个", s_sta_ssid,
+                     CONNECT_TIMEOUT_MS / 1000);
         }
         advance_candidate();
     } else if (!mid_attempt && s_need_select && s_saved_count > 0 &&

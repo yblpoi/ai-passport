@@ -50,6 +50,9 @@ run_static_checks() (
         main/love_event_order.c main/love_date.c main/love_lunar.c
     # 机身轮播:上/下键走到哪一页、一共几页、页码怎么编。纯逻辑,错一位就是页码乱跳。
     run_host_test test_love_view main main/love_view.c
+    # 选网决策:多张已保存热点里挑谁(先扫后试、换候选时看得见的优先、并列取先保存的、
+    # 一轮之内不重复试、时间差要带符号)。
+    run_host_test test_love_net_pick main main/love_net_pick.c
     # 农历换算依赖 tools/gen_lunar_table.py 生成的表,同样按纯逻辑测。
     run_host_test test_love_lunar main main/love_lunar.c main/love_date.c
     run_host_test test_bsp_display_rounding components/bsp/src \
@@ -80,6 +83,9 @@ run_static_checks() (
     "${test_dir}/test_bsp_audio_recovery"
 
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_deep_sleep_contract.py
+    # 选网胶水的静态契约:候选超时用带符号的差值、"换下一个"带上扫描结果、
+    # 热点兜底等扫描落地、每条候选失败都留下可分辨的日志。
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_wifi_select_contract.py
     # 图标素材生成器：调色板 PNG 解码、降采样的取舍，以及"设备那张 16 色表一字不许改"
     # 这条不变量（新头像自带调色板，但老头像与内置图标仍然靠它，改了会让它们换色）。
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_love_pixel_art_gen.py

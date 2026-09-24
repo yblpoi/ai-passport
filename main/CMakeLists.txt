@@ -12,6 +12,7 @@ idf_component_register(
          "love_lunar.c"
          "love_store.c"
          "love_time.c"
+         "love_net_pick.c"
          "love_net.c"
          "love_ble.c"
          "love_httpd.c"

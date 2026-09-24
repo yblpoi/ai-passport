@@ -299,15 +299,6 @@ static void start_ap_profile(void)
     ESP_LOGI(TAG, "热点已就绪: %s (密码见设备屏幕)", ssid);
 }
 
-// 本轮还有没有没试过的候选?有就返回下标,没有返回 -1。
-static int next_untried(void)
-{
-    for (size_t i = 0; i < s_saved_count; i++) {
-        if ((s_tried & (1u << i)) == 0) return (int)i;
-    }
-    return -1;
-}
-
 // 开始连接第 index 个候选。
 static void start_candidate(size_t index)
 {
@@ -381,17 +372,15 @@ static void select_round_begin(void)
 // 扫描结果回来了:在已保存的候选里挑信号最强的。
 static void pick_from_scan(void)
 {
-    int best = -1;
-    int best_rssi = -127;
+    // 判据在 love_net_pick.c 里(纯逻辑、有 host test);这里只把两条数据摆成它要的形状。
+    // 摆的是 5 个指针,不是一个扫描结果副本 —— 这条路径跑在心跳任务上,栈要省着用。
+    const char *ssids[LOVE_WIFI_MAX];
     for (size_t i = 0; i < s_saved_count; i++) {
-        for (size_t j = 0; j < s_scan_count; j++) {
-            if (strcmp(s_saved[i].ssid, s_scan[j].ssid) != 0) continue;
-            if ((int)s_scan[j].rssi > best_rssi) {
-                best_rssi = s_scan[j].rssi;
-                best = (int)i;
-            }
-        }
+        ssids[i] = s_saved[i].ssid;
     }
+    int best_rssi = -127;
+    const int best = love_net_pick_strongest(ssids, s_saved_count, s_scan, s_scan_count,
+                                             &best_rssi);
 
     if (best < 0) {
         ESP_LOGI(TAG, "选网:附近没有已保存的热点,按保存顺序尝试");
@@ -409,7 +398,15 @@ static void advance_candidate(void)
     s_candidate = -1;
     s_candidate_failed = false;
 
-    const int next = next_untried();
+    // 与 pick_from_scan() 摆的是同一种形状:一串指针,不复制扫描结果(心跳任务的栈)。
+    const char *ssids[LOVE_WIFI_MAX];
+    for (size_t i = 0; i < s_saved_count; i++) {
+        ssids[i] = s_saved[i].ssid;
+    }
+    // 下一跳优先给"这一轮扫到过的"候选(信号强的先):用户的多张网络分属不同的环境,
+    // 只按保存顺序换候选会把整轮时间花在已经搬走的热点上,而身边那张网要等下一轮。
+    const int next = love_net_pick_next_untried(ssids, s_saved_count, s_tried,
+                                                s_scan, s_scan_count);
     if (next >= 0) {
         start_candidate((size_t)next);
         return;
@@ -1000,7 +997,7 @@ void love_net_poll(void)
     const bool mid_attempt = (s_candidate >= 0);
     if (mid_attempt && s_state != LOVE_NET_CONNECTED &&
         (s_candidate_failed ||
-         (now - s_candidate_since) > pdMS_TO_TICKS(CONNECT_TIMEOUT_MS))) {
+         love_net_pick_elapsed_ms(now, s_candidate_since) > (int32_t)CONNECT_TIMEOUT_MS)) {
         // 换候选之前先把这一次收掉:驱动可能还停在"正在连接"上(它自己的超时比我们长),
         // 此时下一次 esp_wifi_connect() 会返回 ESP_ERR_WIFI_CONN —— 那个错误在
         // start_candidate 里被当成"已经在连了"容忍掉(只留一条 WARN),于是新候选的
@@ -1030,10 +1027,11 @@ void love_net_poll(void)
     // 唯一的例外是用户手动关过热点(s_ap_manual_off 为真):那说明"进不去"是他自己选的,
     // 再自动开回来就是噪音。这时兜底的计时照常累加 —— 一旦用户手动开一次热点,闸就撤销了。
     //
-    // 计时只在"没在尝试连接"的空档里走:一轮候选要花掉十几到几十秒,过程中切到
-    // APSTA 会把正在进行的连接打断(esp_wifi_set_mode 会重启射频),那等于白试一轮。
+    // 计时只在"没在尝试连接、也没有扫描在飞"的空档里走:一轮候选要花掉十几到几十秒,
+    // 过程中切到 APSTA 会把正在进行的连接打断(esp_wifi_set_mode 会重启射频),
+    // 还会把正在进行的扫描作废 —— 那等于白试一轮。扫描只占 1~3 秒,等它落地再兜底。
     const bool mid_round = (s_candidate >= 0);
-    if (s_saved_count > 0 && s_state != LOVE_NET_CONNECTED && !mid_round) {
+    if (s_saved_count > 0 && s_state != LOVE_NET_CONNECTED && !mid_round && !s_scan_pending) {
         if (s_sta_down_since == 0) {
             s_sta_down_since = now;
         } else if (!s_ap_requested && !s_ap_manual_off &&

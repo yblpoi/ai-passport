@@ -88,17 +88,33 @@ The device remembers up to **5** networks (`LOVE_WIFI_MAX`), in save order, in
 one like this:
 
 1. **Scan first** (about 1-2 s) and join the strongest saved network it sees;
-2. if none is seen — including hidden SSIDs, which never show up in a scan — try the
-   saved networks **in order**, 15 s each (`CONNECT_TIMEOUT_MS`);
-3. if a whole round fails, back off and retry: 30 s, doubling each round, capped at
+2. after a candidate fails, prefer the remaining saved networks **the scan saw**
+   (strongest first), and only walk them in save order when none of them was seen.
+   Save order is the user's own priority, but one list can span several places, so
+   working it in order alone would spend the round on networks that have moved away.
+   Hidden SSIDs never show up in a scan, which is why the save-order fallback exists
+   at all;
+3. give each candidate 15 s (`CONNECT_TIMEOUT_MS`), timed from that candidate's own
+   start — the comparison is signed on purpose, see below;
+4. if a whole round fails, back off and retry: 30 s, doubling each round, capped at
    5 minutes.
 
-During the backoff it neither reconnects nor logs, so a device that cannot reach any
-known network settles into one summary line every 5 minutes (the throttle constant is
-`ROUND_LOG_MIN_INTERVAL_MS`). That is deliberate: the earlier implementation called
+That 15 s is measured with `love_net_pick_elapsed_ms()`, never as a plain unsigned
+subtraction. The heartbeat samples its `now` at the top of an iteration, and a scan
+result can start a candidate later in that same iteration, so `since` is newer than
+`now`; unsigned math underflowed into a huge positive number and turned the freshly
+chosen candidate into an instant "15 s without an event". The strongest network the
+scan had just found was therefore dropped within milliseconds on every round, with
+its tried-bit already set, so it was never really attempted at all.
+
+During the backoff it does not reconnect, but each attempt still leaves its reason in
+the log: one `love_net` line per failed candidate carrying the Wi-Fi disconnect
+`reason` code, one more when a candidate sees no event at all within its 15 s, and a
+summary line per round (`ROUND_LOG_MIN_INTERVAL_MS` throttles that one to every 5
+minutes in the steady state). That is deliberate: the earlier implementation called
 `esp_wifi_connect()` straight from the disconnect event, which with credentials
 saved but the network gone meant a reconnect every second plus one warning each
-time. For per-attempt detail, raise the driver logs with `log wifi info`.
+time. For driver-level detail beyond that, raise the driver logs with `log wifi info`.
 
 Credential edits: an existing SSID updates its password in place and keeps its
 position, a new name is appended, and a full list means you delete one first (web
@@ -112,16 +128,24 @@ The hotspot is `LoveCount-XXXX`; its SSID is derived from the same MAC and its p
 is **generated randomly on first boot and stored in NVS** (`love_store_load_ap_pass()`,
 shown on the device screen). It used to be derived from the MAC as well, which meant
 anyone who could see the SSID could compute the password and then reach the admin page,
-which has no authentication of its own. It opens automatically in exactly two situations:
+which has no authentication of its own. It opens automatically in exactly three situations:
 
 | Trigger | Condition | Code |
 | --- | --- | --- |
 | Boot | The device has no saved credentials | `love_net_init()` |
+| Deep-sleep wake | The hotspot was on when the device went to sleep, and no manual-close gate is set | `love_net_deinit()` records it in RTC memory, `love_net_init()` restores it |
 | Station-down fallback | Credentials exist but the station has neither connected nor been in a selection round for 60 s | `love_net_poll()` |
 
-The fallback timer only runs while no attempt is in flight: a round of candidates
-takes tens of seconds, and switching to APSTA in the middle of one restarts the
-radio (`esp_wifi_set_mode()`), which would throw that round away.
+Deep sleep is a restart, so the "the user wanted this hotspot" intent only survives in RTC
+memory; without that snapshot a device with saved credentials would come back with the
+hotspot off until the 60 s fallback fires — and never, once the manual-close gate below is
+set. The gate always wins over the snapshot.
+
+The fallback timer only runs while no attempt is in flight **and no scan is pending**:
+a round of candidates takes tens of seconds, and switching to APSTA in the middle of
+one restarts the radio (`esp_wifi_set_mode()`), which would throw that round away.
+The same switch invalidates an in-flight scan, and a round that starts out by losing
+its scan degrades to blind save order. A scan takes 1-3 s, so waiting for it is cheap.
 
 It also opens on demand from the device settings page, the network card of the
 admin page, or the `ap on` console command. While it is open and the station is
@@ -129,6 +153,22 @@ connected it closes itself after **five minutes without activity** (every admin
 page request and every button press on the device counts); that automatic close
 deliberately does **not** count as a manual close, so the fallback above still
 works later.
+
+Opening or closing it walks `apply_mode()`, which is the only place the driver mode is
+changed. That call reports errors instead of aborting the firmware: it runs on the input
+task when the settings row is pressed, which can collide with a running scan, and an
+`ESP_ERROR_CHECK` there used to reboot the device — from the outside, "I pressed the
+hotspot row and nothing happened". A failed switch now logs once and is retried on the
+1 Hz heartbeat (`s_mode_dirty`), so a rejected press still takes effect about a second
+later. Each press leaves one line in the log (the module logs opening and closing the
+hotspot separately), which is the only way to tell "the key never reached the network
+layer" from "the mode switch itself failed".
+
+Switching modes restarts the radio, so a connected station drops for a moment when the
+hotspot is opened or closed — `love_net` logs one dropped-connection line with reason 8 —
+and comes back through a normal selection round about two seconds later. That is the
+driver's behavior, not a defect: `esp_wifi_set_mode()` cannot add or remove the AP
+interface without bringing the station down with it.
 
 Closing it from the device, from the web page or with `ap off` sets a
 *manual-off* latch, persisted in the `ap_off` key of the same NVS namespace.

@@ -4,6 +4,9 @@ sdkconfig
 sdkconfig.old
 managed_components/
 
+# Local code-graph tooling output (graphify). Generated, not part of the product.
+graphify-out/
+
 # Editors, IDEs, and editor-local history/cache.
 .vscode/
 .idea/

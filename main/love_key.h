@@ -28,6 +28,8 @@ typedef enum {
 } love_key_intent_t;
 
 // 判定一次按键事件的意图。screen_off = 当前是否已熄屏(背光已关)。
-// 注意:按下(PRESS)在熄屏时也**不是**唤醒事件 —— 让它唤醒就等于把同一次手势的
-// CLICK 放进来执行。熄屏唤醒落在 CLICK / DOUBLE / LONG 上。
+// 注意:按下(PRESS)与抬起(RELEASE)在熄屏时都**不是**唤醒事件 —— 让 PRESS 唤醒就等于
+// 把同一次手势的 CLICK 放进来执行;RELEASE 则是 BSP 为"深睡唤醒后判断那颗键是否已松手"
+// 补发的事件,手势在 CLICK / DOUBLE / LONG 就已判完,同样必须忽略,否则松手会多执行
+// 一次动作。熄屏唤醒落在 CLICK / DOUBLE / LONG 上。
 love_key_intent_t love_key_intent(bool screen_off, bsp_btn_ev_t ev);

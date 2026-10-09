@@ -89,10 +89,14 @@ static void cb_press (void *a, void *u) { on_event(a, u, BSP_BTN_PRESS);  }
 static void cb_click (void *a, void *u) { on_event(a, u, BSP_BTN_CLICK);  }
 static void cb_double(void *a, void *u) { on_event(a, u, BSP_BTN_DOUBLE); }
 static void cb_long  (void *a, void *u) { on_event(a, u, BSP_BTN_LONG);   }
+static void cb_release(void *a, void *u) { on_event(a, u, BSP_BTN_RELEASE); }
 
 // 初始化中途失败时先停掉所有 button driver，再释放本文件持有的校准与 ADC unit。
 // button driver 仍在轮询时不能先删 ADC，否则 timer callback 会访问失效句柄。
-static void button_cleanup(void) {
+// 返回 ESP_OK 表示按键、校准与 ADC unit 都已完整回收；否则返回首个错误码，
+// 供 prepare_deep_sleep 判断能否安全切回数字输入。
+static esp_err_t button_cleanup(void) {
+    esp_err_t first_err = ESP_OK;
     s_cb = NULL;
     s_user = NULL;
     s_ready = false;
@@ -103,6 +107,7 @@ static void button_cleanup(void) {
         esp_err_t e = iot_button_delete(s_btn[i]);
         if (e != ESP_OK) {
             ESP_LOGE(TAG, "按键 %d 回滚失败: %s", i, esp_err_to_name(e));
+            if (first_err == ESP_OK) first_err = e;
             continue;
         }
         s_btn[i] = NULL;
@@ -110,19 +115,31 @@ static void button_cleanup(void) {
 
     // Never free the ADC beneath a driver whose deletion failed.
     for (int i = 0; i < BSP_BTN_COUNT; ++i) {
-        if (s_btn[i]) return;
+        if (s_btn[i]) {
+            if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_STATE;
+            return first_err;
+        }
     }
 
     if (s_cali) {
         esp_err_t e = adc_cali_delete_scheme_curve_fitting(s_cali);
-        if (e != ESP_OK) ESP_LOGE(TAG, "ADC 校准回滚失败: %s", esp_err_to_name(e));
-        else s_cali = NULL;
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "ADC 校准回滚失败: %s", esp_err_to_name(e));
+            if (first_err == ESP_OK) first_err = e;
+        } else {
+            s_cali = NULL;
+        }
     }
     if (s_adc) {
         esp_err_t e = adc_oneshot_del_unit(s_adc);
-        if (e != ESP_OK) ESP_LOGE(TAG, "ADC unit 回滚失败: %s", esp_err_to_name(e));
-        else s_adc = NULL;
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "ADC unit 回滚失败: %s", esp_err_to_name(e));
+            if (first_err == ESP_OK) first_err = e;
+        } else {
+            s_adc = NULL;
+        }
     }
+    return first_err;
 }
 
 static esp_err_t register_callbacks(button_handle_t button, void *index) {
@@ -130,6 +147,7 @@ static esp_err_t register_callbacks(button_handle_t button, void *index) {
     if (e == ESP_OK) e = iot_button_register_cb(button, BUTTON_SINGLE_CLICK, NULL, cb_click, index);
     if (e == ESP_OK) e = iot_button_register_cb(button, BUTTON_DOUBLE_CLICK, NULL, cb_double, index);
     if (e == ESP_OK) e = iot_button_register_cb(button, BUTTON_LONG_PRESS_START, NULL, cb_long, index);
+    if (e == ESP_OK) e = iot_button_register_cb(button, BUTTON_PRESS_UP, NULL, cb_release, index);
     return e;
 }
 
@@ -158,7 +176,7 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
     if (ae != ESP_OK) {
         ESP_LOGE(TAG, "ADC unit 创建失败 (%s)", esp_err_to_name(ae));
         s_adc = NULL;
-        button_cleanup();
+        (void)button_cleanup();
         return ae;
     }
 
@@ -167,7 +185,7 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
     ae = adc_oneshot_config_channel(s_adc, BSP_BTN_ADC_CHANNEL, &channel);
-    if (ae != ESP_OK) { button_cleanup(); return ae; }
+    if (ae != ESP_OK) { (void)button_cleanup(); return ae; }
     const adc_cali_curve_fitting_config_t cal = {
         .unit_id = BSP_BTN_ADC_UNIT,
         .chan = BSP_BTN_ADC_CHANNEL,
@@ -177,7 +195,7 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
     ae = adc_cali_create_scheme_curve_fitting(&cal, &s_cali);
     if (ae != ESP_OK) {
         ESP_LOGE(TAG, "ADC 校准创建失败: %s", esp_err_to_name(ae));
-        button_cleanup();
+        (void)button_cleanup();
         return ae; // No guessed mV: an unavailable reading is not an UP press.
     }
 
@@ -186,27 +204,32 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
             .base = { .get_key_level = button_level, .del = button_driver_delete },
             .index = (unsigned)i,
         };
-        const button_config_t bc = { 0 };
+        // 判定门限由 BSP 显式下发(见 bsp_pins.h):组件 Kconfig 默认的长按 1500ms 偏迟钝。
+        const button_config_t bc = {
+            .short_press_time = BSP_BTN_SHORT_PRESS_MS,
+            .long_press_time  = BSP_BTN_LONG_PRESS_MS,
+        };
         esp_err_t e = iot_button_create(&bc, &s_drivers[i].base, &s_btn[i]);
         if (e != ESP_OK || !s_btn[i]) {
             ESP_LOGE(TAG, "按键 %d 创建失败 (%s) —— 检查 GPIO%d 的 ADC 配置与分压电阻",
                      i, esp_err_to_name(e), BSP_BTN_ADC_CHANNEL);
             e = e == ESP_OK ? ESP_FAIL : e;
-            button_cleanup();
+            (void)button_cleanup();
             return e;
         }
         void *idx = (void *)(intptr_t)i;
         e = register_callbacks(s_btn[i], idx);
         if (e != ESP_OK) {
             ESP_LOGE(TAG, "按键 %d 回调注册失败: %s", i, esp_err_to_name(e));
-            button_cleanup();
+            (void)button_cleanup();
             return e;
         }
     }
 
     s_sample_valid = false;
     s_ready = true;
-    ESP_LOGI(TAG, "按键就绪:ADC1_CH%d 三键分压", BSP_BTN_ADC_CHANNEL);
+    ESP_LOGI(TAG, "按键就绪:ADC1_CH%d 三键分压,短按 %dms 长按 %dms",
+             BSP_BTN_ADC_CHANNEL, BSP_BTN_SHORT_PRESS_MS, BSP_BTN_LONG_PRESS_MS);
     return ESP_OK;
 }
 
@@ -234,7 +257,12 @@ esp_err_t bsp_button_suspend(void) {
     //    (真正让"睡下去几秒自己醒"成立的那一条在 IDF 那边:它默认按唤醒电平给深睡 IO
     //    自动加内部上下拉,与板上外部上拉叠加 —— 见 sdkconfig.defaults 的
     //    CONFIG_ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS。两件事要一起做对。)
-    button_cleanup();
+    //
+    // 回滚不完整(仍有存活的按键句柄或 ADC unit)时**不能**继续往入睡走:既留下仍会
+    // 轮询的驱动,又让调用方以为可以安全入睡。所以这里的失败要如实上报,由
+    // power_sleep 放弃入睡并把按键装回去(见 button_cleanup 返回首个错误码)。
+    const esp_err_t cleanup_err = button_cleanup();
+    if (err == ESP_OK) err = cleanup_err;
     return err;
 }
 

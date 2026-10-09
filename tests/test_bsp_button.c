@@ -46,8 +46,11 @@ esp_err_t adc_cali_raw_to_voltage(adc_cali_handle_t h, int raw, int *mv) {
     *mv = raw; return ESP_OK;
 }
 int64_t esp_timer_get_time(void) { return clock_us; }
+
 esp_err_t iot_button_create(const button_config_t *cfg, const button_driver_t *driver, button_handle_t *h) {
-    (void)cfg;
+    // 判定门限必须由 BSP 显式下发(bsp_pins.h),不能退回组件默认的 180 / 1500ms。
+    assert(cfg->short_press_time == BSP_BTN_SHORT_PRESS_MS);
+    assert(cfg->long_press_time == BSP_BTN_LONG_PRESS_MS);
     if (++create_calls == fail_create) return ESP_ERR_NO_MEM;
     for (int i = 0; i < BSP_BTN_COUNT; ++i) {
         if (buttons[i].live) continue;
@@ -89,13 +92,42 @@ static void assert_clean(void) {
     assert(!adc_live && !cal_live && !live_buttons && !s_ready && !s_adc && !s_cali);
     for (int i = 0; i < BSP_BTN_COUNT; ++i) assert(!s_btn[i]);
 }
+
+// 深睡前必须把按键整套拆掉(见 bsp_button_suspend):周期采样与 ADC 都要停,而且
+// 唤醒源武装失败时还能原样装回来。本板刻意不碰内部上拉,交给外部 10k。
+static void check_suspend_resume(void) {
+    reset_faults();
+    suspend_calls = 0;
+    assert(bsp_button_init(event_cb, &events) == ESP_OK);
+
+    assert(bsp_button_suspend() == ESP_OK);
+    assert(suspend_calls == 1);                    // 先停采样,再拆 ADC
+    assert_clean();                                // 采样与 ADC 都已释放
+
+    // 回滚不完整时不得返回成功,否则调用方会带着仍会轮询的驱动去入睡。
+    assert(bsp_button_init(event_cb, &events) == ESP_OK);
+    fail_delete = 1;
+    assert(bsp_button_suspend() != ESP_OK);
+    fail_delete = 0;
+    assert(button_cleanup() == ESP_OK);
+    assert_clean();
+
+    // 武装唤醒源失败后走恢复路径:按键要能带着原回调回来。
+    reset_faults();
+    assert(bsp_button_resume() == ESP_OK);
+    assert(create_calls == BSP_BTN_COUNT && live_buttons == BSP_BTN_COUNT);
+    suspend_calls = 0;
+    assert(bsp_button_suspend() == ESP_OK);
+    assert(suspend_calls == 1 && live_buttons == 0);
+    assert_clean();
+}
 static void retry_success(void) {
     assert_clean(); reset_faults();
     assert(bsp_button_init(event_cb, &events) == ESP_OK);
     assert(create_calls == BSP_BTN_COUNT && live_buttons == BSP_BTN_COUNT);
     assert(bsp_button_init(event_cb, &events) == ESP_OK);
     assert(create_calls == BSP_BTN_COUNT);
-    button_cleanup(); assert_clean();
+    (void)button_cleanup(); assert_clean();
 }
 static void check_voltage(int mv, int expected) {
     raw_mv = mv; clock_us += 2000;
@@ -110,7 +142,7 @@ int main(void) {
         reset_faults(); fail_create = i;
         assert(bsp_button_init(event_cb, &events) != ESP_OK); retry_success();
     }
-    for (int i = 1; i <= BSP_BTN_COUNT * 4; ++i) {
+    for (int i = 1; i <= BSP_BTN_COUNT * 5; ++i) {
         reset_faults(); fail_callback = i;
         assert(bsp_button_init(event_cb, &events) != ESP_OK); retry_success();
     }
@@ -134,10 +166,10 @@ int main(void) {
     fail_read = 0; fail_convert = 1; clock_us += 2000;
     for (int i = 0; i < BSP_BTN_COUNT; ++i) assert(!button_level(&s_drivers[i].base));
     assert(bsp_button_read_mv() == -1);
-    fail_delete = 1; button_cleanup();
+    fail_delete = 1; assert(button_cleanup() != ESP_OK);
     assert(adc_live && cal_live && live_buttons == BSP_BTN_COUNT);
     assert(bsp_button_init(event_cb, &events) == ESP_ERR_INVALID_STATE);
-    fail_delete = 0; button_cleanup(); retry_success();
-
+    fail_delete = 0; assert(button_cleanup() == ESP_OK); retry_success();
+    check_suspend_resume();
     puts("BSP button fault-injection tests: PASS");
 }

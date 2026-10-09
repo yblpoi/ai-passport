@@ -143,6 +143,32 @@ Also worth knowing: **USB-Serial-JTAG is powered down in deep sleep**, so the se
 port disappears and a host cannot wake the device.
 That is what debug mode is for.
 
+### After a key wake, block the key that is still held
+
+A key wake reboots the chip while the waking key is **still held down**. The button
+component starts a few hundred milliseconds later, sees a level that is already
+pressed, and grades it as a long press once the hold passes the threshold
+(`BSP_BTN_LONG_PRESS_MS`, 500 ms here) — so an unintended action fires almost
+immediately (page turn, entering settings).
+
+`main.c` therefore carries a key-action guard (`main/key_guard.h`): it swallows every
+key event until the waking key is released, with a 10 s deadline so a stuck key cannot
+leave the pad dead. Two easy ways to get this wrong:
+
+- **Disarming cannot rely on the release event alone.** If the user lets go before the
+  button component starts observing, it never saw a press and will never send a release,
+  so the guard would stay armed until the deadline. That is why the state is synced once
+  from the real voltage after `bsp_button_init()` (`key_guard_sync_released()`, threshold
+  `BSP_BTN_MV_RELEASED_MIN`); pass `false` when the sample fails and stay armed.
+- **The guard must be consumed before the readiness check.** A release can land between
+  the post-init voltage sample and input dispatch becoming ready; dropping it at
+  `!s_input_ready` would leave the guard armed to swallow the next real press.
+  `tests/test_key_wake_contract.py` pins that statically.
+
+The `RELEASE` event is not itself a key action: the gesture was already judged by
+CLICK / DOUBLE / LONG, so `love_key.c` ignores it alongside PRESS — otherwise letting go
+would run one extra action (and blank the screen one extra time).
+
 ## Debug mode
 
 `debug on` (USB only) keeps the screen on and suppresses both idle stages until

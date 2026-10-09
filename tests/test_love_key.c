@@ -9,9 +9,12 @@
 #include "love_key.h"
 
 // 官方组件在三种手势下发给应用的事件序列(iot_button.c,细节见 love_key.h)。
-static const bsp_btn_ev_t SHORT_PRESS[] = { BSP_BTN_PRESS, BSP_BTN_CLICK };
-static const bsp_btn_ev_t DOUBLE_TAP[]  = { BSP_BTN_PRESS, BSP_BTN_PRESS, BSP_BTN_DOUBLE };
-static const bsp_btn_ev_t LONG_PRESS[]  = { BSP_BTN_PRESS, BSP_BTN_LONG };
+// RELEASE 是 BSP 为"深睡按键唤醒后判断那颗键是否已松手"补发的事件,夹在按下与
+// 判定事件之间 —— 它必须被忽略,否则松手会多执行一次动作。
+static const bsp_btn_ev_t SHORT_PRESS[] = { BSP_BTN_PRESS, BSP_BTN_RELEASE, BSP_BTN_CLICK };
+static const bsp_btn_ev_t DOUBLE_TAP[]  = { BSP_BTN_PRESS, BSP_BTN_RELEASE,
+                                            BSP_BTN_PRESS, BSP_BTN_RELEASE, BSP_BTN_DOUBLE };
+static const bsp_btn_ev_t LONG_PRESS[]  = { BSP_BTN_PRESS, BSP_BTN_RELEASE, BSP_BTN_LONG };
 
 typedef struct {
     const bsp_btn_ev_t *events;
@@ -20,9 +23,9 @@ typedef struct {
 } gesture_t;
 
 static const gesture_t GESTURES[] = {
-    { SHORT_PRESS, 2, "短按" },
-    { DOUBLE_TAP, 3, "连按两次" },
-    { LONG_PRESS, 2, "长按" },
+    { SHORT_PRESS, 3, "短按" },
+    { DOUBLE_TAP, 5, "连按两次" },
+    { LONG_PRESS, 3, "长按" },
 };
 
 // 走一遍手势,统计"亮屏"与"执行动作"各发生几次。
@@ -43,19 +46,21 @@ static void run_gesture(bool *screen_off, const gesture_t *gesture, int *wake, i
     }
 }
 
-// 熄屏时:按下什么都没发生;三个判定事件都只亮屏、不下发动到界面。
+// 熄屏时:按下与抬起都没发生;三个判定事件都只亮屏、不下发动到界面。
 static void test_blanked_screen_never_acts(void)
 {
     assert(love_key_intent(true, BSP_BTN_PRESS) == LOVE_KEY_IGNORE);
+    assert(love_key_intent(true, BSP_BTN_RELEASE) == LOVE_KEY_IGNORE);
     assert(love_key_intent(true, BSP_BTN_CLICK) == LOVE_KEY_WAKE);
     assert(love_key_intent(true, BSP_BTN_DOUBLE) == LOVE_KEY_WAKE);
     assert(love_key_intent(true, BSP_BTN_LONG) == LOVE_KEY_WAKE);
 }
 
-// 亮屏时:按下仍然不是动作(否则同一次手势会被执行两遍),判定事件正常下发。
+// 亮屏时:按下与抬起仍然不是动作(否则同一次手势会被执行两遍),判定事件正常下发。
 static void test_awake_screen_acts_on_the_judged_event(void)
 {
     assert(love_key_intent(false, BSP_BTN_PRESS) == LOVE_KEY_IGNORE);
+    assert(love_key_intent(false, BSP_BTN_RELEASE) == LOVE_KEY_IGNORE);
     assert(love_key_intent(false, BSP_BTN_CLICK) == LOVE_KEY_ACT);
     assert(love_key_intent(false, BSP_BTN_DOUBLE) == LOVE_KEY_ACT);
     assert(love_key_intent(false, BSP_BTN_LONG) == LOVE_KEY_ACT);

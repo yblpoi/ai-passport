@@ -38,6 +38,9 @@ run_static_checks() (
     }
 
     run_host_test test_ui_pixel_math main main/ui_pixel_math.c
+    # 深睡按键唤醒后的动作守卫:纯状态机,上游在演示菜单里发现的"唤醒键还按着就被
+    # 判成长按"误触发,本机走同一条 GPIO0 唤醒路径,同样要挡住。
+    run_host_test test_key_guard main
     # 控制台的行协议:BLE 串口一次写入可能只有半行,也可能一次带好几行,
     # 行尾在手机 App 上有三种写法,超长行必须整行丢弃而不是截断后执行。
     run_host_test test_love_console_line main main/love_console_line.c
@@ -103,6 +106,9 @@ run_static_checks() (
     fi
     # 预览向量必须与设备端实现同步(改了 C 的规则就要重新生成,否则两边会各说各话)。
     PYTHONDONTWRITEBYTECODE=1 python3 tools/gen_date_vectors.py --check
+    # 守卫必须在 on_key 里先于就绪检查被消费:release 落在采样与 input dispatch 就绪
+    # 之间时,被就绪检查挡掉就会一直武装着吞掉下一次真实按键。
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_key_wake_contract.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py

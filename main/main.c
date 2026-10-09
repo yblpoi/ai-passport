@@ -17,13 +17,14 @@
 #include "bsp_button.h"
 #include "bsp_display.h"
 #include "bsp_i2c.h"
-#include "bsp_pins.h"      // 错误日志里要打印 BSP_LCD_* 引脚号
+#include "bsp_pins.h"      // 错误日志里要打印 BSP_LCD_* 引脚号;撤防采样要 BSP_BTN_MV_RELEASED_MIN
+#include "key_guard.h"
 #include "love_app.h"
 #include "love_log.h"
 #include "power_sleep.h"
-
 #include "esp_log.h"
 #include "esp_sleep.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -43,6 +44,12 @@ typedef struct {
 static QueueHandle_t s_input_queue;
 static TaskHandle_t s_input_task;
 static volatile bool s_input_ready;
+
+// 深睡按键唤醒后的"按键动作守卫"。本机同样用 GPIO0 低电平唤醒深睡(见 power_sleep.c),
+// 所以上游那条"唤醒键还按着就重启 → 组件把它判成长按 → 立刻误触发一个动作"的坑在这里
+// 同样成立:长按门限 500ms(见 bsp_pins.h),比按键组件启动还快。
+#define KEY_GUARD_MAX_US (10LL * 1000 * 1000)
+static key_guard_t s_key_guard;
 
 static void input_task(void *arg)
 {
@@ -67,6 +74,15 @@ static void input_task(void *arg)
 static void on_key(bsp_btn_t btn, bsp_btn_ev_t ev, void *user)
 {
     (void)user;
+    // 先消费守卫、再查就绪标志:release 可能落在初始化后的电压采样与 input dispatch
+    // 就绪之间,在这里被就绪检查挡掉的话,守卫会一直武装着吞掉下一次真实按键。
+    const bool was_armed = s_key_guard.armed;
+    if (key_guard_consume(&s_key_guard, ev == BSP_BTN_RELEASE, esp_timer_get_time())) {
+        if (was_armed && !s_key_guard.armed) {
+            ESP_LOGI(TAG, "唤醒键已松手,按键恢复响应");
+        }
+        return;
+    }
     if (!s_input_ready || !s_input_queue) return;
     const input_event_t input = { .btn = btn, .event = ev };
     (void)xQueueSend(s_input_queue, &input, 0);
@@ -94,6 +110,11 @@ void app_main(void)
     esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
     if (wakeup != ESP_SLEEP_WAKEUP_UNDEFINED) {
         ESP_LOGI(TAG, "休眠唤醒原因: %d", wakeup);
+        // 按键唤醒时那颗键在整个启动期间还按着,先挡住它的动作(见 on_key)。
+        if (wakeup == ESP_SLEEP_WAKEUP_GPIO) {
+            key_guard_arm(&s_key_guard, esp_timer_get_time(), KEY_GUARD_MAX_US);
+            ESP_LOGI(TAG, "按键唤醒:先屏蔽按键动作,直到那颗键松手");
+        }
     }
     // 抄一份唤醒原因进 RTC 内存:主机开一次串口就可能复位芯片,复位后实时寄存器
     // 就变"上电/复位"了(见 power_sleep.h)。
@@ -121,6 +142,16 @@ void app_main(void)
         ESP_LOGE(TAG, "按键事件任务创建失败: %s", esp_err_to_name(input_err));
     } else if (button_err != ESP_OK) {
         ESP_LOGE(TAG, "按键初始化失败: %s", esp_err_to_name(button_err));
+    } else if (s_key_guard.armed) {
+        // 若唤醒键在按键驱动启动前就已松手,组件从头到尾没看到按下,永远不会发
+        // release,守卫会一直拦到兜底。初始化完成后按真实电压同步一次:已松手立即撤防。
+        // 采样失败时 adc_sample_mv 返回 -1,落在 BSP_BTN_MV_RELEASED_MIN 以下,
+        // 于是保守地保持武装 —— 宁可多挡一次按键,不能漏放一个误触发。
+        const bool released = bsp_button_read_mv() >= BSP_BTN_MV_RELEASED_MIN;
+        key_guard_sync_released(&s_key_guard, released);
+        if (!s_key_guard.armed) {
+            ESP_LOGI(TAG, "唤醒键在按键驱动启动前已松手,提前撤防");
+        }
     }
     esp_err_t audio_err = bsp_audio_init();
     if (audio_err != ESP_OK) {
